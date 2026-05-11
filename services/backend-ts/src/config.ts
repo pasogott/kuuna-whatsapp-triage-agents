@@ -36,7 +36,6 @@ const envSchema = z.object({
   OPENAI_TIMEOUT_SECONDS: z.coerce.number().positive().default(30),
   OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
   OPENAI_AUDIO_TRANSCRIPTION_MODEL: z.string().default("gpt-4o-mini-transcribe"),
-  OPENAI_VISION_MODEL: z.string().default("gpt-4.1-mini"),
   PI_TRANSPORT: z.enum(["sse", "websocket", "websocket-cached", "auto"]).default("websocket-cached"),
   PI_AUTH_HOST_PATH: optionalNonEmptyString,
   PI_AUTH_CONTAINER_PATH: absoluteContainerPath,

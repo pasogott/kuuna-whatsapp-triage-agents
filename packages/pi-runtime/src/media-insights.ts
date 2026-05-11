@@ -2,13 +2,18 @@ import type {
   RuntimeMediaAttachment,
   RuntimeMediaInsight,
 } from "@kuuna/agent-contracts";
+import { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { complete } from "@earendil-works/pi-ai";
 import {
+  defaultModel,
   openAiApiKey,
   openAiAudioTranscriptionModel,
   openAiBaseUrl,
   openAiTimeoutMs,
-  openAiVisionModel,
+  piAuthPath,
+  piTransport,
 } from "./config.js";
+import { getOpenAiModel } from "./model.js";
 
 type FetchLike = typeof fetch;
 
@@ -16,14 +21,7 @@ type MediaBytes = {
   bytes: Uint8Array;
   contentType: string;
   dataUrl: string;
-};
-
-type OpenAiChatCompletion = {
-  choices?: Array<{
-    message?: {
-      content?: unknown;
-    };
-  }>;
+  base64: string;
 };
 
 type OpenAiTranscription = {
@@ -65,19 +63,6 @@ async function analyzeAttachment(
     };
   }
 
-  const apiKey = openAiApiKey();
-  if (!apiKey) {
-    return {
-      media_asset_id: attachment.media_asset_id,
-      mime_type: attachment.mime_type,
-      kind,
-      status: "skipped",
-      summary: attachment.transcript ?? null,
-      transcript: attachment.transcript ?? null,
-      error: "openai_api_key_missing",
-    };
-  }
-
   try {
     const sourceUrl = mediaSourceUrl(attachment, kind);
     if (!sourceUrl) {
@@ -85,7 +70,7 @@ async function analyzeAttachment(
     }
     if (kind === "image") {
       const media = await loadMedia(sourceUrl, attachment.mime_type, fetchClient);
-      const summary = await analyzeImage(media.dataUrl, apiKey, fetchClient, imageInsightPrompt());
+      const summary = await analyzeImageWithPi(media, imageInsightPrompt());
       return {
         media_asset_id: attachment.media_asset_id,
         mime_type: attachment.mime_type,
@@ -97,7 +82,7 @@ async function analyzeAttachment(
     }
 
     if (kind === "video") {
-      const videoInsight = await analyzeVideoAttachment(attachment, apiKey, fetchClient);
+      const videoInsight = await analyzeVideoAttachment(attachment, fetchClient);
       return {
         media_asset_id: attachment.media_asset_id,
         mime_type: attachment.mime_type,
@@ -108,6 +93,10 @@ async function analyzeAttachment(
       };
     }
 
+    const apiKey = openAiApiKey();
+    if (!apiKey) {
+      throw new Error("audio_transcription_requires_openai_api_key");
+    }
     const media = await loadMedia(sourceUrl, attachment.mime_type, fetchClient);
     const transcript = await transcribeAudio(media.bytes, media.contentType, attachment.file_name ?? "audio", apiKey, fetchClient);
     return {
@@ -162,10 +151,12 @@ async function loadMedia(
     response.headers.get("content-type")?.split(";", 1)[0]?.trim() ||
     fallbackContentType;
   const bytes = new Uint8Array(await response.arrayBuffer());
+  const base64 = Buffer.from(bytes).toString("base64");
   return {
     bytes,
     contentType,
-    dataUrl: `data:${contentType};base64,${Buffer.from(bytes).toString("base64")}`,
+    base64,
+    dataUrl: `data:${contentType};base64,${base64}`,
   };
 }
 
@@ -179,69 +170,76 @@ function mediaBytesFromDataUrl(url: string, fallbackContentType: string): MediaB
   const bytes = match[2]
     ? Buffer.from(encoded, "base64")
     : Buffer.from(decodeURIComponent(encoded), "utf8");
+  const base64 = Buffer.from(bytes).toString("base64");
   return {
     bytes,
     contentType,
-    dataUrl: `data:${contentType};base64,${Buffer.from(bytes).toString("base64")}`,
+    base64,
+    dataUrl: `data:${contentType};base64,${base64}`,
   };
 }
 
-async function analyzeImage(
-  imageDataUrl: string,
-  apiKey: string,
-  fetchClient: FetchLike,
+async function analyzeImageWithPi(
+  media: MediaBytes,
   instruction: string,
 ): Promise<string> {
-  const response = await fetchClient(`${openAiBaseUrl()}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: openAiVisionModel(),
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: instruction,
-            },
-            {
-              type: "image_url",
-              image_url: { url: imageDataUrl },
-            },
-          ],
-        },
-      ],
-      max_tokens: 400,
-    }),
-    signal: AbortSignal.timeout(openAiTimeoutMs()),
+  const authPath = piAuthPath();
+  if (!authPath) {
+    throw new Error("pi_chatgpt_auth_required_for_media_preview");
+  }
+  const authStorage = AuthStorage.create(authPath);
+  const apiKey = await authStorage.getApiKey("openai-codex", { includeFallback: false });
+  if (!apiKey) {
+    throw new Error("pi_chatgpt_auth_required_for_media_preview");
+  }
+  const model = getOpenAiModel(defaultModel());
+  if (!model) {
+    throw new Error(`OpenAI model '${defaultModel()}' is not available in Pi model registry`);
+  }
+  const response = await complete(model, {
+    systemPrompt: "You analyze WhatsApp media for support staff. Return only the concise analysis text.",
+    messages: [
+      {
+        role: "user",
+        timestamp: Date.now(),
+        content: [
+          { type: "text", text: instruction },
+          { type: "image", data: media.base64, mimeType: media.contentType },
+        ],
+      },
+    ],
+  }, {
+    apiKey,
+    transport: piTransport(),
+    timeoutMs: openAiTimeoutMs(),
+    maxRetries: 0,
   });
-  if (!response.ok) {
-    throw new Error(`openai_vision_http_${response.status}: ${(await response.text()).slice(0, 300)}`);
+  const content = response.content
+    .filter((item) => item.type === "text" && item.text.trim())
+    .map((item) => item.type === "text" ? item.text.trim() : "")
+    .join("\n")
+    .trim();
+  if (content) {
+    return content;
   }
-  const payload = (await response.json()) as OpenAiChatCompletion;
-  const content = payload.choices?.[0]?.message?.content;
-  if (typeof content === "string" && content.trim()) {
-    return content.trim();
-  }
-  throw new Error("openai_vision_empty_response");
+  throw new Error(response.errorMessage || "pi_media_preview_empty_response");
 }
 
 async function analyzeVideoAttachment(
   attachment: RuntimeMediaAttachment,
-  apiKey: string,
   fetchClient: FetchLike,
 ): Promise<string> {
   if (attachment.preview_url) {
     const preview = await loadMedia(attachment.preview_url, "image/jpeg", fetchClient);
     if (preview.contentType.toLowerCase().startsWith("image/")) {
-      return analyzeImage(preview.dataUrl, apiKey, fetchClient, videoPreviewInsightPrompt());
+      return analyzeImageWithPi(preview, videoPreviewInsightPrompt());
     }
   }
 
+  const apiKey = openAiApiKey();
+  if (!apiKey) {
+    throw new Error("audio_transcription_requires_openai_api_key");
+  }
   const sourceUrl = attachment.object_url ?? attachment.preview_url;
   if (!sourceUrl) {
     throw new Error("media_url_missing");

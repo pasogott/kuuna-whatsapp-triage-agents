@@ -163,7 +163,7 @@ are ignored by git.
 
 Useful local overrides:
 
-- `OPENAI_API_KEY` in `infra/env/backend.env.local` for embeddings, retrieval query vectors, and media analysis/transcription
+- `OPENAI_API_KEY` in `infra/env/backend.env.local` for embeddings, retrieval query vectors, and audio/video transcription
 - `PI_TRANSPORT=websocket-cached` for pi's cached OpenAI WebSocket transport
 - `PI_AUTH_HOST_PATH=$HOME/.pi/agent/auth.json` to mount credentials created by `pi` `/login` into runtime containers
 - `AGENT_MENTION_IDS` in `infra/env/backend.env.local` for the real bot JID(s)
@@ -201,14 +201,16 @@ PI_AUTH_CONTAINER_PATH=/runtime-data/pi-auth.json
 This setup is intentionally split:
 
 - Agent LLM calls use the mounted Pi ChatGPT login only.
-- Embeddings, retrieval query vectors, and runtime media analysis use
-  `OPENAI_API_KEY`.
+- Image and video-preview media analysis use the mounted Pi ChatGPT login only.
+- Embeddings, retrieval query vectors, and audio/video transcription use
+  `OPENAI_API_KEY` only.
 
 Do not use `OPENAI_API_KEY` as an agent LLM fallback. The runtime does not
-register it as an agent model credential, does not switch agent model calls to
-API-key billing, and requires the mounted Pi auth file for agent LLM execution.
-If the key is empty, embeddings fall back to local pseudo-embeddings and media
-analysis is skipped with `openai_api_key_missing`.
+register it as an agent model credential, does not switch agent or image-preview
+analysis calls to API-key billing, and requires the mounted Pi auth file for
+agent LLM execution. If the key is empty, embeddings fall back to local
+pseudo-embeddings and audio/video transcription fails explicitly with
+`audio_transcription_requires_openai_api_key`.
 
 ### Development Start
 Run the full development stack from the repository root:

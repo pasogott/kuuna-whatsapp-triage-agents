@@ -41,10 +41,6 @@ export function openAiTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : 30_000;
 }
 
-export function openAiVisionModel(): string {
-  return process.env.OPENAI_VISION_MODEL?.trim() || "gpt-4.1-mini";
-}
-
 export function openAiAudioTranscriptionModel(): string {
   return process.env.OPENAI_AUDIO_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 }

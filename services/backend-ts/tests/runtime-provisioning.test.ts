@@ -36,7 +36,6 @@ const baseSettings: Settings = {
   OPENAI_TIMEOUT_SECONDS: 30,
   OPENAI_EMBEDDING_MODEL: "text-embedding-3-small",
   OPENAI_AUDIO_TRANSCRIPTION_MODEL: "gpt-4o-mini-transcribe",
-  OPENAI_VISION_MODEL: "gpt-4.1-mini",
   PI_TRANSPORT: "websocket-cached",
   PI_AUTH_CONTAINER_PATH: "/runtime-data/pi-auth.json",
   S3_BUCKET: "kuuna-dev",
