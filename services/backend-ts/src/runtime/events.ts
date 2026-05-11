@@ -15,6 +15,7 @@ export const runtimeEventTypeSchema = z.enum([
   "message.decision",
   "media.updated",
   "agent_run.updated",
+  "agent_run.stream",
   "tool_invocation.created",
   "todo.updated",
   "outbound_intent.updated",

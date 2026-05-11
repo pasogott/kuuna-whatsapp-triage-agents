@@ -12,11 +12,19 @@ export {
 } from "./config.js";
 export { getOpenAiModel, modelPath, normalizeModelName, piThinkingLevel } from "./model.js";
 export { buildPrompt, type PromptAssembly } from "./prompt.js";
-export { runAgent } from "./runner.js";
+export {
+  DEFAULT_GONDOLIN_PROFILE,
+  GondolinRuntime,
+  normalizeGondolinProfile,
+  type GondolinRuntimeOptions,
+} from "./gondolin.js";
+export { runAgent, type RunAgentOptions } from "./runner.js";
 export {
   KUUNA_TOOL_NAMES,
   createKuunaTools,
   executeExplicitTool,
+  isBashCommandAllowed,
   sanitizeAllowedTools,
+  type KuunaToolOptions,
   type RuntimeToolState,
 } from "./tools.js";

@@ -18,6 +18,7 @@ services:
       - dashboard_next:/workspace/apps/dashboard/.next
       - backend_ts_node_modules:/workspace/services/backend-ts/node_modules
       - gateway_node_modules:/workspace/services/gateway/node_modules
+      - runtime_runner_node_modules:/workspace/services/runtime-runner/node_modules
 
   dashboard:
     build:
@@ -166,6 +167,35 @@ services:
       backend:
         condition: service_healthy
 
+  runtime-runner:
+    profiles: ["runtime-runner"]
+    build:
+      context: ../..
+      dockerfile: services/runtime-runner/Dockerfile.dev
+    working_dir: /workspace
+    command: >
+      sh -c 'pnpm --filter @kuuna/runtime-runner dev'
+    environment:
+      HOST: "::"
+      PORT: "8095"
+      RUNTIME_WORKSPACE_ROOT: /workspace
+      RUNTIME_EVENT_SINK_URL: http://backend:8000/internal/runtime-events/publish
+      RUNTIME_EVENT_SINK_TOKEN: ${INTERNAL_OPS_TOKEN:-change-me-in-dev}
+      RUNTIME_RUNNER_TOKEN: ${RUNTIME_RUNNER_TOKEN:-change-me-in-dev}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+    ports:
+      - "127.0.0.1:8095:8095"
+    volumes:
+      - ../..:/workspace
+      - workspace_node_modules:/workspace/node_modules
+      - runtime_runner_node_modules:/workspace/services/runtime-runner/node_modules
+    depends_on:
+      node-deps:
+        condition: service_completed_successfully
+      backend:
+        condition: service_healthy
+
   postgres:
     image: pgvector/pgvector:pg16
     environment:
@@ -210,6 +240,7 @@ volumes:
   workspace_node_modules:
   backend_ts_node_modules:
   gateway_node_modules:
+  runtime_runner_node_modules:
   gateway_session:
   postgres_data:
   minio_data:

@@ -52,8 +52,6 @@ import type {
 import { createSessionBackendTrpcClient, getInternalOpsToken } from "@/lib/backend/client";
 import { titleFromGroupId } from "@/lib/utils/format";
 
-const ENABLE_MOCK_FALLBACK = process.env.DASHBOARD_ENABLE_MOCK_FALLBACK === "1";
-
 type UnknownRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): UnknownRecord {
@@ -94,6 +92,7 @@ function templateBuildStatus(value: string): TemplateBuildStatus {
 }
 
 async function withOptionalMock<T>(label: string, loader: () => Promise<T>, fallback: () => T): Promise<T> {
+  void fallback;
   try {
     return await loader();
   } catch (error) {
@@ -101,9 +100,6 @@ async function withOptionalMock<T>(label: string, loader: () => Promise<T>, fall
       throw error;
     }
     console.warn(`[dashboard-api] ${label}: backend failed`, error);
-    if (ENABLE_MOCK_FALLBACK) {
-      return fallback();
-    }
     throw error;
   }
 }
@@ -167,6 +163,12 @@ function mapTemplateVersion(row: {
           : undefined,
     piBashEnabled: runtimeImage.pi_bash_enabled === true || runtimeImage.piBashEnabled === true,
     piBashAllowlist: stringList(runtimeImage.pi_bash_allowlist ?? runtimeImage.piBashAllowlist),
+    gondolinProfile:
+      typeof runtimeImage.gondolin_profile === "string"
+        ? runtimeImage.gondolin_profile
+        : typeof runtimeImage.gondolinProfile === "string"
+          ? runtimeImage.gondolinProfile
+          : "base",
   };
   return {
     id: row.id,
@@ -868,7 +870,8 @@ export async function listGroupMembers(providerGroupId: string): Promise<WhatsAp
 export async function listBindingTimeline(bindingId: string): Promise<BindingTimelineEvent[]> {
   const binding = await getBinding(bindingId);
   if (!binding) {
-    return ENABLE_MOCK_FALLBACK ? bindingTimeline.filter((item) => item.bindingId === bindingId) : [];
+    void bindingTimeline;
+    return [];
   }
   return [
     {
@@ -909,9 +912,8 @@ export async function listKnownProviderGroups(): Promise<KnownProviderGroup[]> {
 }
 
 export async function listPromptAssets(instanceId?: string): Promise<PromptAsset[]> {
-  if (ENABLE_MOCK_FALLBACK) {
-    return promptAssets.filter((item) => !instanceId || item.instanceId === instanceId);
-  }
+  void instanceId;
+  void promptAssets;
   return [];
 }
 
@@ -1109,7 +1111,8 @@ export async function getTraceDetail(traceId: string): Promise<TraceDetail | und
   const mock = traceDetails.find((item) => item.traceId === traceId);
   const event = (await listAuditEvents()).find((item) => item.traceId === traceId);
   if (!event) {
-    return ENABLE_MOCK_FALLBACK ? mock : undefined;
+    void mock;
+    return undefined;
   }
   return {
     traceId,

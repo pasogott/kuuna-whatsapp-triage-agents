@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
+import { runtimeAgentEventBatchSchema } from "@kuuna/agent-contracts";
 import fastify, { type FastifyError } from "fastify";
 import { ZodError } from "zod";
 
@@ -7,6 +8,7 @@ import { getSettings } from "./config.js";
 import { closeDb, db, type Database } from "./db/client.js";
 import { closeQueues, enqueueKuunaJob, type EnqueueKuunaJob } from "./jobs/queues.js";
 import { logger } from "./logging.js";
+import { publishRuntimeEvent } from "./runtime/events.js";
 import { initSentry } from "./sentry.js";
 import { RuntimeToolSearchError, searchRuntimeTool } from "./runtime/tool-search.js";
 import { createTRPCContext } from "./trpc/init.js";
@@ -78,6 +80,33 @@ export async function buildServer(options: BuildServerOptions = {}) {
       }
       throw error;
     }
+  });
+
+  app.post("/internal/runtime-events/publish", async (request, reply) => {
+    const settings = getSettings();
+    const expected = settings.RUNTIME_EVENT_SINK_TOKEN?.trim() || settings.INTERNAL_OPS_TOKEN?.trim();
+    if (!expected) {
+      return reply.code(503).send({ detail: "runtime event sink token not configured" });
+    }
+    if (request.headers["x-internal-token"] !== expected) {
+      return reply.code(403).send({ detail: "invalid runtime event sink token" });
+    }
+
+    const batch = runtimeAgentEventBatchSchema.parse(request.body);
+    for (const event of batch.events) {
+      await publishRuntimeEvent({
+        type: event.type === "run_completed" || event.type === "run_failed" ? "agent_run.updated" : "agent_run.stream",
+        providerGroupId: batch.provider_group_id ?? null,
+        traceId: batch.trace_id ?? null,
+        entityId: batch.run_id,
+        entityType: "agent_run",
+        payload: {
+          ...event,
+          agent_run_id: batch.run_id,
+        },
+      });
+    }
+    return { ok: true, ingested: batch.events.length };
   });
 
   await app.register(fastifyTRPCPlugin, {

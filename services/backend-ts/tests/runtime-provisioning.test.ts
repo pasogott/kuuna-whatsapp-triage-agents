@@ -49,6 +49,7 @@ const baseSettings: Settings = {
   TEMPLATE_BUILD_CONTEXT_PATH: ".",
   TEMPLATE_BUILD_DOCKERFILE_PATH: "services/runtime-agent-ts/Dockerfile",
   RUNTIME_AGENT_TIMEOUT_SECONDS: 45,
+  RUNTIME_EVENT_SINK_URL: "http://backend:8000/internal/runtime-events/publish",
   RUNTIME_DOCKER_SOCKET: "/var/run/docker.sock",
   RUNTIME_DOCKER_NETWORK: "kuuna-dev_default",
   RUNTIME_AGENT_IMAGE: "kuuna-runtime-agent-ts:dev",
@@ -56,6 +57,7 @@ const baseSettings: Settings = {
   RUNTIME_TOOL_BACKEND_BASE_URL: "http://backend:8000",
   RUNTIME_CONTAINER_DATA_DIR: "/runtime-data",
   RUNTIME_CONTAINER_DATA_VOLUME_PREFIX: "kuuna-runtime-data",
+  GONDOLIN_PROFILE_ASSETS_CONTAINER_DIR: "/gondolin-profiles",
 };
 
 class FakeDockerClient implements DockerClient {
@@ -134,11 +136,13 @@ function matchingContainer(runtimeIdentity: RuntimeIdentity, running: boolean): 
 function buildDesiredHash(runtimeIdentity: RuntimeIdentity): string {
   const labels = buildRuntimeLabels(runtimeIdentity);
   const env = buildRuntimeEnv(runtimeIdentity, baseSettings);
+  const binds = [`${dataVolumeName(runtimeIdentity.containerName, baseSettings)}:${baseSettings.RUNTIME_CONTAINER_DATA_DIR}`];
   return createHash("sha256")
     .update(JSON.stringify({
       image: "kuuna-runtime-agent-ts:dev",
       imageId: "sha256:runtime-dev",
       env: [...env].sort(),
+      binds: [...binds].sort(),
       labels: Object.entries(labels).sort(([left], [right]) => left.localeCompare(right)),
     }))
     .digest("hex");
@@ -180,6 +184,54 @@ test("provisionRuntimeContainer creates a lazy per-chat container and volume", a
     assert.equal(payload.HostConfig.NetworkMode, "kuuna-dev_default");
     assert.equal(payload.Labels["dev.kuuna.provider-group-id"], runtimeIdentity.providerGroupId);
     assert.ok(payload.Env.includes(`KUUNA_PROVIDER_GROUP_ID=${runtimeIdentity.providerGroupId}`));
+    assert.ok(payload.Env.includes("RUNTIME_WORKSPACE_ROOT=/workspace"));
+  });
+});
+
+test("provisionRuntimeContainer mounts Gondolin profile assets read-only when configured", async () => {
+  await withHealthyRuntime(async () => {
+    const runtimeIdentity = identity();
+    const docker = new FakeDockerClient();
+
+    await provisionRuntimeContainer(docker, {
+      identity: runtimeIdentity,
+      image: "kuuna-runtime-agent-ts:dev",
+      settings: {
+        ...baseSettings,
+        GONDOLIN_PROFILE_ASSETS_HOST_DIR: "/srv/gondolin-profiles",
+        GONDOLIN_PROFILE_ASSETS_CONTAINER_DIR: "/gondolin-profiles",
+      },
+    });
+
+    const payload = docker.createdPayloads[0] as {
+      HostConfig: { Binds: string[] };
+      Env: string[];
+    };
+    assert.deepEqual(payload.HostConfig.Binds, [
+      `${dataVolumeName(runtimeIdentity.containerName, baseSettings)}:/runtime-data`,
+      "/srv/gondolin-profiles:/gondolin-profiles:ro",
+    ]);
+    assert.ok(payload.Env.includes("GONDOLIN_PROFILE_ASSETS_DIR=/gondolin-profiles"));
+  });
+});
+
+test("provisionRuntimeContainer recreates stale containers when Gondolin asset mount changes", async () => {
+  await withHealthyRuntime(async () => {
+    const runtimeIdentity = identity();
+    const docker = new FakeDockerClient();
+    docker.container = matchingContainer(runtimeIdentity, true);
+
+    await provisionRuntimeContainer(docker, {
+      identity: runtimeIdentity,
+      image: "kuuna-runtime-agent-ts:dev",
+      settings: {
+        ...baseSettings,
+        GONDOLIN_PROFILE_ASSETS_HOST_DIR: "/srv/gondolin-profiles",
+      },
+    });
+
+    assert.deepEqual(docker.removedContainers, ["container-existing"]);
+    assert.equal(docker.createdPayloads.length, 1);
   });
 });
 

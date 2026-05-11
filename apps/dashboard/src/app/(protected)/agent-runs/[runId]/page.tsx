@@ -6,6 +6,7 @@ import {
   AUTO_REFRESH_INTERVALS,
   AutoRefresh,
 } from "@/components/system/auto-refresh";
+import { RuntimeStreamPanel } from "@/components/agent-runs/runtime-stream-panel";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { listAgentRuns, listToolInvocations } from "@/lib/api-client";
@@ -198,15 +199,9 @@ export default async function AgentRunDetailPage({ params }: { params: Params })
       </section>
 
       <section>
-        <h2 className="text-sm font-semibold text-foreground">Agent response</h2>
+        <h2 className="text-sm font-semibold text-foreground">Pi stream</h2>
         <div className="mt-2">
-          {run.responseText ? (
-            <CodeBlock value={formatJsonLike(run.responseText)} />
-          ) : (
-            <p className="border-t border-border py-4 text-sm text-muted-foreground">
-              No response text recorded.
-            </p>
-          )}
+          <RuntimeStreamPanel runId={run.id} initialText={run.responseText} />
         </div>
       </section>
 

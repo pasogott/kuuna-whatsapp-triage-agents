@@ -33,6 +33,7 @@
     "test": "node --conditions=development --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
+    "@earendil-works/gondolin": "^0.8.0",
     "@kuuna/agent-contracts": "workspace:*",
     "@mariozechner/pi-agent-core": "0.70.6",
     "@mariozechner/pi-ai": "0.70.6",

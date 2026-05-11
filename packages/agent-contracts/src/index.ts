@@ -71,6 +71,7 @@ export const runtimeAgentContextSchema = z
 export const runtimeAgentConfigSchema = z.object({
   pi_bash_enabled: z.boolean().default(false),
   pi_bash_allowlist: z.array(z.string().min(1)).default([]),
+  gondolin_profile: z.string().trim().min(1).default("base"),
 });
 
 export const runtimeAgentRequestSchema = z.object({
@@ -114,6 +115,50 @@ export const runtimeAgentResultSchema = z.object({
   tool_results: z.array(toolExecutionResultSchema).default([]),
   media_insights: z.array(runtimeMediaInsightSchema).default([]),
   error: z.string().nullable().optional(),
+});
+
+export const runtimeAgentStreamEventTypeSchema = z.enum([
+  "text_delta",
+  "thinking_delta",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+]);
+
+export const runtimeAgentStreamEventSchema = z.object({
+  type: runtimeAgentStreamEventTypeSchema,
+  delta: z.string().optional(),
+  text: z.string().optional(),
+  tool_call_id: z.string().nullable().optional(),
+  tool_name: z.string().nullable().optional(),
+  sequence: z.number().int().nonnegative().optional(),
+  timestamp: z.string().optional(),
+  payload: z.record(z.unknown()).default({}),
+});
+
+export const runtimeAgentRunEventSchema = z.union([
+  runtimeAgentStreamEventSchema,
+  z.object({
+    type: z.literal("run_completed"),
+    response_text: z.string().nullable().optional(),
+    model_used: z.string().nullable().optional(),
+    payload: z.record(z.unknown()).default({}),
+    timestamp: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("run_failed"),
+    error: z.string(),
+    payload: z.record(z.unknown()).default({}),
+    timestamp: z.string().optional(),
+  }),
+]);
+
+export const runtimeAgentEventBatchSchema = z.object({
+  run_id: z.string().min(1),
+  conversation_id: z.string().min(1).nullable().optional(),
+  provider_group_id: z.string().min(1).nullable().optional(),
+  trace_id: z.string().min(1).nullable().optional(),
+  events: z.array(runtimeAgentRunEventSchema).min(1),
 });
 
 export const runtimeToolSearchRequestSchema = z.object({
@@ -161,5 +206,9 @@ export type RuntimeAgentRequest = z.infer<typeof runtimeAgentRequestSchema>;
 export type ModelAttempt = z.infer<typeof modelAttemptSchema>;
 export type ToolExecutionResult = z.infer<typeof toolExecutionResultSchema>;
 export type RuntimeAgentResult = z.infer<typeof runtimeAgentResultSchema>;
+export type RuntimeAgentStreamEventType = z.infer<typeof runtimeAgentStreamEventTypeSchema>;
+export type RuntimeAgentStreamEvent = z.infer<typeof runtimeAgentStreamEventSchema>;
+export type RuntimeAgentRunEvent = z.infer<typeof runtimeAgentRunEventSchema>;
+export type RuntimeAgentEventBatch = z.infer<typeof runtimeAgentEventBatchSchema>;
 export type RuntimeToolSearchRequest = z.infer<typeof runtimeToolSearchRequestSchema>;
 export type RuntimeToolSearchResponse = z.infer<typeof runtimeToolSearchResponseSchema>;

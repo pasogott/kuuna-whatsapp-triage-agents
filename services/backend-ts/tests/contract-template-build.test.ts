@@ -31,6 +31,7 @@ test("contract: template build tRPC queues published version", { skip: skipReaso
     dockerfileSnippet: "RUN apt-get update",
     piBashEnabled: true,
     piBashAllowlist: [" jq ", "PYTHON"],
+    gondolinProfile: "python",
   });
 
   assert.equal(body.template_id, seeded.templateId);
@@ -41,6 +42,7 @@ test("contract: template build tRPC queues published version", { skip: skipReaso
   assert.equal((body.build_inputs as Record<string, unknown>).dockerfile_snippet, "RUN apt-get update");
   assert.equal((body.build_inputs as Record<string, unknown>).pi_bash_enabled, true);
   assert.deepEqual((body.build_inputs as Record<string, unknown>).pi_bash_allowlist, ["jq", "python"]);
+  assert.equal((body.build_inputs as Record<string, unknown>).gondolin_profile, "python");
 
   assert.equal(harness.jobs.length, 1);
   assert.equal(harness.jobs[0]?.name, "template_build");
@@ -70,6 +72,7 @@ test("contract: template build tRPC uses runtime image settings from template ve
       allowed_tools: ["message_history"],
       runtime_image: {
         dockerfile_snippet: "RUN apt-get update",
+        gondolin_profile: "media",
         pi_bash_enabled: true,
         pi_bash_allowlist: [" jq ", "PYTHON"],
       },
@@ -86,6 +89,7 @@ test("contract: template build tRPC uses runtime image settings from template ve
   assert.equal((body.build_inputs as Record<string, unknown>).dockerfile_snippet, "RUN apt-get update");
   assert.equal((body.build_inputs as Record<string, unknown>).pi_bash_enabled, true);
   assert.deepEqual((body.build_inputs as Record<string, unknown>).pi_bash_allowlist, ["jq", "python"]);
+  assert.equal((body.build_inputs as Record<string, unknown>).gondolin_profile, "media");
 });
 
 test("contract: template build tRPC rejects unpublished or missing versions", { skip: skipReason }, async (t) => {

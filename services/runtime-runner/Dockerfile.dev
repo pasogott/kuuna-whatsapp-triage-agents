@@ -1,0 +1,11 @@
+FROM node:24-bookworm
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+RUN npm install -g pnpm@10.33.2
+
+CMD ["pnpm", "--filter", "@kuuna/runtime-runner", "dev"]

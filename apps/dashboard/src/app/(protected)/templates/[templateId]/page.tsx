@@ -168,11 +168,18 @@ function formatKnowledgeProfile(value: string): string {
 }
 
 function formatRuntimeImageProfile(
-  runtimeImageConfig: { dockerfileSnippet?: string; piBashEnabled: boolean; piBashAllowlist: string[] } | undefined,
+  runtimeImageConfig:
+    | {
+        dockerfileSnippet?: string;
+        piBashEnabled: boolean;
+        piBashAllowlist: string[];
+        gondolinProfile?: string;
+      }
+    | undefined,
 ): string {
-  const parts = ["fixed TS base"];
+  const parts = [`Gondolin: ${runtimeImageConfig?.gondolinProfile ?? "base"}`];
   if (runtimeImageConfig?.dockerfileSnippet?.trim()) {
-    parts.push("custom Docker setup");
+    parts.push("outer runtime setup");
   }
   if (runtimeImageConfig?.piBashEnabled) {
     parts.push(`bash: ${runtimeImageConfig.piBashAllowlist.length} allowlisted`);
@@ -428,14 +435,30 @@ export default async function TemplateDetailPage({
               <div className="space-y-1">
                 <h3 className="text-sm font-medium text-foreground">Pi runtime image</h3>
                 <p className="text-xs text-muted-foreground">
-                  Saved with this template version. Image builds use these settings without asking again.
+                  Saved with this template version. The TS runner stays fixed; agent tools belong in the Gondolin guest profile.
                 </p>
               </div>
 
               <FormRow
-                label="Additional Dockerfile instructions"
+                label="Gondolin guest profile"
+                htmlFor="gondolinProfile"
+                hint="Selects the micro-VM image used for Pi read, write, edit, and bash tools."
+              >
+                <Select
+                  id="gondolinProfile"
+                  name="gondolinProfile"
+                  defaultValue={runtimeImageConfigPrefill?.gondolinProfile ?? "base"}
+                >
+                  <option value="base">Base</option>
+                  <option value="python">Python tools</option>
+                  <option value="media">Media tools</option>
+                </Select>
+              </FormRow>
+
+              <FormRow
+                label="Outer runtime Dockerfile instructions"
                 htmlFor="dockerfileSnippet"
-                hint="Inserted after the TS agent setup. FROM, CMD, ENTRYPOINT, and EXPOSE are blocked."
+                hint="Advanced runner-container setup only. Put Python, ffmpeg, and agent shell tools in the Gondolin guest profile instead."
               >
                 <Textarea
                   id="dockerfileSnippet"

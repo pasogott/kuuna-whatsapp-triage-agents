@@ -329,9 +329,8 @@ export default async function OverviewPage() {
       </section>
 
       <Notice title="MVP mode" tone="info">
-        This dashboard runs with mocked control-plane data when the backend is
-        unavailable. Once API and queue services are connected, these cards will
-        reflect live state automatically.
+        This dashboard requires the live backend. Runtime and control-plane
+        updates flow through the backend event stream.
       </Notice>
     </div>
   );

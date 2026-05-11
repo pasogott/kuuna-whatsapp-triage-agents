@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULT_OPENAI_BASE_URL } from "../src/config.js";
+import { GondolinRuntime } from "../src/gondolin.js";
 import { getOpenAiModel } from "../src/model.js";
 import { runAgent } from "../src/runner.js";
 import { isBashCommandAllowed, sanitizeAllowedTools } from "../src/tools.js";
 
-test("sanitizes allowed tools without enabling Pi coding tools", () => {
+test("sanitizes allowed tools while preserving explicitly requested Pi file tools", () => {
   assert.deepEqual(
     sanitizeAllowedTools(["uppercase", "bash", "read", "media_analyze", "todo_create", "write"]),
-    ["uppercase", "media_analyze", "todo_create"],
+    ["uppercase", "read", "media_analyze", "todo_create", "write"],
   );
 });
 
@@ -51,6 +52,59 @@ test("python allowlist covers python family and useful code execution forms", ()
   assert.equal(isBashCommandAllowed("python - <<PY\nprint('hi')\nPY", ["python"]), false);
 });
 
+test("Gondolin bash uses a minimal guest environment", async () => {
+  const runtime = new GondolinRuntime(process.cwd());
+  let receivedEnv: Record<string, string> | undefined;
+  (runtime as unknown as { ensureVm: () => Promise<unknown> }).ensureVm = async () => ({
+    exec: (_command: string[], options: { env?: Record<string, string> }) => {
+      receivedEnv = options.env;
+      const result = { ok: true, exitCode: 0 };
+      return {
+        output: async function* () {},
+        then: Promise.resolve(result).then.bind(Promise.resolve(result)),
+      };
+    },
+  });
+
+  const state = { context: {}, results: [] };
+  await runtime.createBashOps(state, ["python"]).exec(
+    "python -c \"print('hi')\"",
+    process.cwd(),
+    {
+      onData: () => undefined,
+      env: {
+        OPENAI_API_KEY: "secret",
+        RUNTIME_EVENT_SINK_TOKEN: "secret",
+      } as NodeJS.ProcessEnv,
+    },
+  );
+
+  assert.deepEqual(receivedEnv, {
+    HOME: "/root",
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    TMPDIR: "/tmp",
+  });
+});
+
+test("Gondolin write streams content through stdin", async () => {
+  const runtime = new GondolinRuntime(process.cwd());
+  const calls: Array<{ command: string[]; stdin?: Buffer }> = [];
+  (runtime as unknown as { ensureVm: () => Promise<unknown> }).ensureVm = async () => ({
+    exec: async (command: string[], options: { stdin?: Buffer } = {}) => {
+      calls.push({ command, stdin: options.stdin });
+      return { ok: true, exitCode: 0, stderr: "" };
+    },
+  });
+
+  const largeContent = "x".repeat(256 * 1024);
+  await runtime.createWriteOps().writeFile(pathForTest("gondolin-large.txt"), largeContent);
+
+  assert.deepEqual(calls[0]?.command.slice(0, 3), ["/bin/mkdir", "-p", "/workspace"]);
+  assert.deepEqual(calls[1]?.command.slice(0, 3), ["/bin/sh", "-c", "cat > \"$1\""]);
+  assert.equal(calls[1]?.command.some((part) => part.includes(largeContent)), false);
+  assert.equal(calls[1]?.stdin?.byteLength, largeContent.length);
+});
+
 test("uses gpt-5.5 and medium reasoning by default", async () => {
   const previousApiKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
@@ -72,6 +126,10 @@ test("uses gpt-5.5 and medium reasoning by default", async () => {
     }
   }
 });
+
+function pathForTest(fileName: string): string {
+  return `${process.cwd()}/${fileName}`;
+}
 
 test("applies OPENAI_BASE_URL to Pi OpenAI models", () => {
   const previousBaseUrl = process.env.OPENAI_BASE_URL;

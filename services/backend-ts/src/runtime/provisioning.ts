@@ -33,7 +33,11 @@ const reservedRuntimeEnvKeys = new Set([
   "KUUNA_SECRETS_REF",
   "KUUNA_RUNTIME_TOOL_BACKEND_BASE_URL",
   "KUUNA_RUNTIME_TOOL_TOKEN",
+  "RUNTIME_EVENT_SINK_URL",
+  "RUNTIME_EVENT_SINK_TOKEN",
   "KUUNA_RUNTIME_DATA_DIR",
+  "RUNTIME_WORKSPACE_ROOT",
+  "GONDOLIN_PROFILE_ASSETS_DIR",
 ]);
 
 export type RuntimeProvisioningErrorCode =
@@ -203,10 +207,12 @@ export async function provisionRuntimeContainer(
   });
   const baseLabels = buildRuntimeLabels(input.identity);
   const env = buildRuntimeEnv(input.identity, input.settings);
+  const binds = buildRuntimeBinds(input.identity.containerName, input.settings);
   const labels = withRuntimeConfigLabels(baseLabels, {
     image: input.image,
     imageId: imageInspect.Id,
     env,
+    binds,
   });
 
   const existing = await dockerClient.inspectContainer(input.identity.containerName);
@@ -220,8 +226,7 @@ export async function provisionRuntimeContainer(
         env,
         labels,
         containerName: input.identity.containerName,
-        dataVolumeName: dataVolumeName(input.identity.containerName, input.settings),
-        dataDir: input.settings.RUNTIME_CONTAINER_DATA_DIR,
+        binds,
         dockerNetwork,
       }),
     )).Id;
@@ -242,8 +247,7 @@ export async function provisionRuntimeContainer(
           env,
           labels,
           containerName: input.identity.containerName,
-          dataVolumeName: dataVolumeName(input.identity.containerName, input.settings),
-          dataDir: input.settings.RUNTIME_CONTAINER_DATA_DIR,
+          binds,
           dockerNetwork,
         }),
       )).Id;
@@ -322,10 +326,17 @@ export function buildRuntimeEnv(identity: RuntimeIdentity, settings: Settings): 
     KUUNA_SECRETS_REF: identity.secretsRef,
     KUUNA_RUNTIME_TOOL_BACKEND_BASE_URL: settings.RUNTIME_TOOL_BACKEND_BASE_URL,
     KUUNA_RUNTIME_DATA_DIR: settings.RUNTIME_CONTAINER_DATA_DIR,
+    RUNTIME_WORKSPACE_ROOT: "/workspace",
+    RUNTIME_EVENT_SINK_URL: settings.RUNTIME_EVENT_SINK_URL,
+    GONDOLIN_PROFILE_ASSETS_DIR: settings.GONDOLIN_PROFILE_ASSETS_CONTAINER_DIR,
   };
   const runtimeToolToken = settings.RUNTIME_TOOL_TOKEN?.trim() || settings.INTERNAL_OPS_TOKEN?.trim();
   if (runtimeToolToken) {
     env.KUUNA_RUNTIME_TOOL_TOKEN = runtimeToolToken;
+  }
+  const runtimeEventSinkToken = settings.RUNTIME_EVENT_SINK_TOKEN?.trim() || settings.INTERNAL_OPS_TOKEN?.trim();
+  if (runtimeEventSinkToken) {
+    env.RUNTIME_EVENT_SINK_TOKEN = runtimeEventSinkToken;
   }
   if (settings.OPENAI_API_KEY?.trim()) {
     env.OPENAI_API_KEY = settings.OPENAI_API_KEY;
@@ -369,13 +380,14 @@ export function parseExtraEnv(rawValue: string | undefined): Record<string, stri
 
 export function withRuntimeConfigLabels(
   labels: Record<string, string>,
-  input: { image: string; imageId: string; env: string[] },
+  input: { image: string; imageId: string; env: string[]; binds: string[] },
 ): Record<string, string> {
   const next: Record<string, string> = { ...labels, [runtimeImageIdLabel]: input.imageId };
   next[runtimeConfigHashLabel] = runtimeConfigHash({
     image: input.image,
     imageId: input.imageId,
     env: input.env,
+    binds: input.binds,
     labels,
   });
   return next;
@@ -385,6 +397,7 @@ function runtimeConfigHash(input: {
   image: string;
   imageId: string;
   env: string[];
+  binds: string[];
   labels: Record<string, string>;
 }): string {
   return createHash("sha256")
@@ -392,9 +405,19 @@ function runtimeConfigHash(input: {
       image: input.image,
       imageId: input.imageId,
       env: [...input.env].sort(),
+      binds: [...input.binds].sort(),
       labels: Object.entries(input.labels).sort(([left], [right]) => left.localeCompare(right)),
     }))
     .digest("hex");
+}
+
+function buildRuntimeBinds(containerName: string, settings: Settings): string[] {
+  const binds = [`${dataVolumeName(containerName, settings)}:${settings.RUNTIME_CONTAINER_DATA_DIR}`];
+  const gondolinProfileAssetsHostDir = normalizeOptional(settings.GONDOLIN_PROFILE_ASSETS_HOST_DIR);
+  if (gondolinProfileAssetsHostDir) {
+    binds.push(`${gondolinProfileAssetsHostDir}:${settings.GONDOLIN_PROFILE_ASSETS_CONTAINER_DIR}:ro`);
+  }
+  return binds;
 }
 
 function buildCreateContainerPayload(input: {
@@ -403,8 +426,7 @@ function buildCreateContainerPayload(input: {
   env: string[];
   labels: Record<string, string>;
   containerName: string;
-  dataVolumeName: string;
-  dataDir: string;
+  binds: string[];
   dockerNetwork: string | null;
 }): DockerCreateContainerPayload {
   const exposedPort = `${input.port}/tcp`;
@@ -415,7 +437,7 @@ function buildCreateContainerPayload(input: {
     ExposedPorts: { [exposedPort]: {} },
     HostConfig: {
       RestartPolicy: { Name: "unless-stopped" },
-      Binds: [`${input.dataVolumeName}:${input.dataDir}`],
+      Binds: input.binds,
     },
   };
   if (input.dockerNetwork) {

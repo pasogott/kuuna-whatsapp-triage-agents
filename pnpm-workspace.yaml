@@ -4,6 +4,7 @@ packages:
   - "services/backend-ts"
   - "services/gateway"
   - "services/runtime-agent-ts"
+  - "services/runtime-runner"
 
 onlyBuiltDependencies:
   - "@sentry/cli"

@@ -14,6 +14,7 @@ import { enqueueKuunaJob, type EnqueueKuunaJob } from "./queues.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const baseImagePattern = /^[a-zA-Z0-9._/:@-]+$/;
+const gondolinProfilePattern = /^[a-z0-9._-]+$/;
 const tagSafePattern = /[^a-zA-Z0-9._-]+/g;
 const dockerfileSnippetMaxLength = 8000;
 const blockedDockerfileInstructions = new Set(["from", "cmd", "entrypoint", "expose"]);
@@ -41,6 +42,7 @@ export type QueueTemplateBuildInput = {
   dockerfileSnippet?: string | null;
   piBashEnabled?: boolean | null;
   piBashAllowlist?: string[] | null;
+  gondolinProfile?: string | null;
 };
 
 export async function queueTemplateBuild(
@@ -81,6 +83,7 @@ export async function queueTemplateBuild(
   );
   const piBashEnabled = input.piBashEnabled ?? runtimeImageConfig.piBashEnabled;
   const piBashAllowlist = normalizeStringList(input.piBashAllowlist ?? runtimeImageConfig.piBashAllowlist);
+  const gondolinProfile = validateGondolinProfile(input.gondolinProfile ?? runtimeImageConfig.gondolinProfile);
   if (piBashEnabled && piBashAllowlist.length === 0) {
     throw new TemplateBuildValidationError("pi_bash_allowlist is required when Pi bash exec is enabled");
   }
@@ -91,6 +94,7 @@ export async function queueTemplateBuild(
     dockerfile_snippet: dockerfileSnippet || null,
     pi_bash_enabled: piBashEnabled,
     pi_bash_allowlist: piBashAllowlist,
+    gondolin_profile: gondolinProfile,
     egress_policy: version.egressPolicy,
     tools_config: version.toolsConfig,
     model_config: version.modelConfig,
@@ -494,6 +498,7 @@ function extractRuntimeImageConfig(toolsConfig: unknown): {
   dockerfileSnippet: string | null;
   piBashEnabled: boolean;
   piBashAllowlist: string[];
+  gondolinProfile: string;
 } {
   const config = objectRecord(toolsConfig);
   const runtimeImage = objectRecord(config.runtime_image ?? config.runtimeImage);
@@ -509,7 +514,16 @@ function extractRuntimeImageConfig(toolsConfig: unknown): {
     piBashAllowlist: normalizeStringList(
       arrayOfStrings(runtimeImage.pi_bash_allowlist ?? runtimeImage.piBashAllowlist),
     ),
+    gondolinProfile: validateGondolinProfile(runtimeImage.gondolin_profile ?? runtimeImage.gondolinProfile),
   };
+}
+
+function validateGondolinProfile(value: unknown): string {
+  const profile = typeof value === "string" && value.trim() ? value.trim().toLowerCase() : "base";
+  if (!gondolinProfilePattern.test(profile)) {
+    throw new TemplateBuildValidationError("gondolin_profile contains invalid characters");
+  }
+  return profile;
 }
 
 function arrayOfStrings(value: unknown): string[] {

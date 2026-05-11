@@ -23,6 +23,9 @@ import {
 import { analyzeRuntimeMedia } from "./media-insights.js";
 
 export const KUUNA_TOOL_NAMES = [
+  "read",
+  "write",
+  "edit",
   "uppercase",
   "media_analyze",
   "chat_history_search",
@@ -37,6 +40,11 @@ export type RuntimeToolState = {
   context: Record<string, unknown>;
   results: ToolExecutionResult[];
   mediaInsights?: RuntimeMediaInsight[];
+};
+
+export type KuunaToolOptions = {
+  createBashTool?: (state: RuntimeToolState, allowlist: string[]) => ToolDefinition;
+  disableCustomBash?: boolean;
 };
 
 const knownToolNames = new Set<string>(KUUNA_TOOL_NAMES);
@@ -148,9 +156,13 @@ export function sanitizeAllowedTools(allowedTools: string[], runtimeConfig?: Run
   return sanitized;
 }
 
-export function createKuunaTools(state: RuntimeToolState, runtimeConfig?: RuntimeAgentConfig): ToolDefinition[] {
-  const tools: ToolDefinition[] = runtimeConfig?.pi_bash_enabled && runtimeConfig.pi_bash_allowlist.length > 0
-    ? [createAllowlistedBashTool(state, runtimeConfig.pi_bash_allowlist)]
+export function createKuunaTools(
+  state: RuntimeToolState,
+  runtimeConfig?: RuntimeAgentConfig,
+  options?: KuunaToolOptions,
+): ToolDefinition[] {
+  const tools: ToolDefinition[] = !options?.disableCustomBash && runtimeConfig?.pi_bash_enabled && runtimeConfig.pi_bash_allowlist.length > 0
+    ? [(options?.createBashTool ?? createAllowlistedBashTool)(state, runtimeConfig.pi_bash_allowlist)]
     : [];
   tools.push(
     ...[

@@ -90,7 +90,8 @@ function rethrowRedirectError(error: unknown): void {
   }
 }
 
-const TEMPLATE_RUNTIME_BASE_IMAGE = "node:22-bookworm";
+const TEMPLATE_RUNTIME_BASE_IMAGE = "node:24-bookworm";
+const GONDOLIN_PROFILES = new Set(["base", "python", "media"]);
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -153,6 +154,8 @@ export async function saveTemplateVersionAction(formData: FormData): Promise<voi
   const includeGroupKnowledge = groupKnowledgeDocKeys !== "none";
   const includeChatHistorySearch = formData.get("includeChatHistorySearch") === "on";
   const dockerfileSnippet = clean(formData.get("dockerfileSnippet"));
+  const requestedGondolinProfile = clean(formData.get("gondolinProfile")) ?? "base";
+  const gondolinProfile = requestedGondolinProfile.toLowerCase();
   const piBashEnabled = formData.get("piBashEnabled") === "on";
   const piBashAllowlist = splitCsvLike(clean(formData.get("piBashAllowlist")));
 
@@ -170,6 +173,13 @@ export async function saveTemplateVersionAction(formData: FormData): Promise<voi
     redirect(
       `/templates/${encodeURIComponent(templateId)}?error=${encodeURIComponent(
         "Pi runtime image: Bash allowlist is required when Pi bash exec is enabled.",
+      )}`,
+    );
+  }
+  if (!GONDOLIN_PROFILES.has(gondolinProfile)) {
+    redirect(
+      `/templates/${encodeURIComponent(templateId)}?error=${encodeURIComponent(
+        "Pi runtime image: unsupported Gondolin guest profile.",
       )}`,
     );
   }
@@ -214,6 +224,7 @@ export async function saveTemplateVersionAction(formData: FormData): Promise<voi
         runtime_image: {
           base_image: TEMPLATE_RUNTIME_BASE_IMAGE,
           dockerfile_snippet: dockerfileSnippet,
+          gondolin_profile: gondolinProfile,
           pi_bash_enabled: piBashEnabled,
           pi_bash_allowlist: piBashAllowlist,
         },

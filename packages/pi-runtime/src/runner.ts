@@ -2,6 +2,7 @@ import {
   AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
+  type ExtensionFactory,
   ModelRegistry,
   SessionManager,
   SettingsManager,
@@ -12,6 +13,7 @@ import {
   type ModelAttempt,
   type RuntimeAgentRequest,
   type RuntimeAgentResult,
+  type RuntimeAgentStreamEvent,
   type RuntimeMediaInsight,
   type ToolExecutionResult,
 } from "@kuuna/agent-contracts";
@@ -26,10 +28,52 @@ import {
 import { getOpenAiModel, modelPath, piThinkingLevel } from "./model.js";
 import { analyzeRuntimeMedia } from "./media-insights.js";
 import { buildPrompt } from "./prompt.js";
-import { createKuunaTools, executeExplicitTool, sanitizeAllowedTools } from "./tools.js";
+import {
+  createKuunaTools,
+  executeExplicitTool,
+  sanitizeAllowedTools,
+  type KuunaToolOptions,
+} from "./tools.js";
+
+export type RunAgentOptions = {
+  cwd?: string;
+  onStreamEvent?: (event: RuntimeAgentStreamEvent) => void | Promise<void>;
+  tools?: KuunaToolOptions;
+  extensionFactories?: (state: {
+    context: Record<string, unknown>;
+    results: ToolExecutionResult[];
+    mediaInsights?: RuntimeMediaInsight[];
+  }) => ExtensionFactory[];
+};
+
+type StreamEventEmitter = {
+  emit: (event: RuntimeAgentStreamEvent) => void;
+  drain: () => Promise<void>;
+};
 
 function placeholderResponse(modelName: string, request: RuntimeAgentRequest): string {
   return [`[${modelName}] Processed request.`, `User: ${request.user_prompt}`].join("\n");
+}
+
+function createStreamEventEmitter(options: RunAgentOptions | undefined): StreamEventEmitter {
+  let queue: Promise<void> = Promise.resolve();
+  return {
+    emit(event) {
+      if (!options?.onStreamEvent) return;
+      const stampedEvent = {
+        timestamp: new Date().toISOString(),
+        ...event,
+      };
+      queue = queue
+        .then(() => options.onStreamEvent?.(stampedEvent))
+        .catch((error: unknown) => {
+          console.warn("[pi-runtime] stream event sink failed", error);
+        });
+    },
+    drain: async () => {
+      await queue;
+    },
+  };
 }
 
 function lastAssistantText(messages: unknown[]): string {
@@ -115,6 +159,8 @@ async function runPiAttempt(
   modelName: string,
   allowedTools: string[],
   mediaInsights: RuntimeMediaInsight[],
+  streamEvents: StreamEventEmitter,
+  options?: RunAgentOptions,
 ): Promise<{ responseText: string; toolResults: ToolExecutionResult[] }> {
   const model = getOpenAiModel(modelName);
   if (!model) {
@@ -129,48 +175,67 @@ async function runPiAttempt(
     compaction: { enabled: false },
     retry: { enabled: true, maxRetries: 1 },
   });
-  const authStorage = AuthStorage.inMemory();
+  const authStorage = AuthStorage.create();
   const apiKey = openAiApiKey();
   if (apiKey) {
     authStorage.setRuntimeApiKey("openai", apiKey);
   }
   const modelRegistry = ModelRegistry.inMemory(authStorage);
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: process.cwd(),
-    agentDir: "/tmp/kuuna-pi-agent",
-    settingsManager,
-    systemPromptOverride: () => prompt.systemPrompt,
-  });
-  await resourceLoader.reload();
-
+  const cwd = options?.cwd ?? process.cwd();
   const toolState = {
     context: { ...(request.context ?? {}), media_insights: mediaInsights },
     results: [] as ToolExecutionResult[],
     mediaInsights,
   };
+  const resourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir: "/tmp/kuuna-pi-agent",
+    extensionFactories: options?.extensionFactories?.(toolState),
+    settingsManager,
+    systemPromptOverride: () => prompt.systemPrompt,
+  });
+  await resourceLoader.reload();
+
   const { session } = await createAgentSession({
-    cwd: process.cwd(),
+    cwd,
     agentDir: "/tmp/kuuna-pi-agent",
     model,
     thinkingLevel: piThinkingLevel(request.reasoning_effort),
     authStorage,
     modelRegistry,
-    noTools: "builtin",
     tools: allowedTools,
-    customTools: createKuunaTools(toolState, request.runtime_config),
+    customTools: createKuunaTools(toolState, request.runtime_config, options?.tools),
     sessionManager: SessionManager.inMemory(),
     settingsManager,
     resourceLoader,
   });
 
   let streamedText = "";
+  let sequence = 0;
   const unsubscribe = session.subscribe((event) => {
-    if (event.type !== "message_update") {
+    if (event.type === "message_update") {
+      const update = event.assistantMessageEvent;
+      if (update.type === "text_delta") {
+        streamedText += update.delta;
+        streamEvents.emit({
+          type: "text_delta",
+          delta: update.delta,
+          sequence: sequence++,
+          payload: {},
+        });
+      }
       return;
     }
-    const update = event.assistantMessageEvent;
-    if (update.type === "text_delta") {
-      streamedText += update.delta;
+
+    if (event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") {
+      const payload = event as unknown as Record<string, unknown>;
+      streamEvents.emit({
+        type: event.type,
+        tool_call_id: typeof payload.toolCallId === "string" ? payload.toolCallId : null,
+        tool_name: typeof payload.toolName === "string" ? payload.toolName : null,
+        sequence: sequence++,
+        payload,
+      });
     }
   });
 
@@ -187,12 +252,14 @@ async function runPiAttempt(
     return { responseText, toolResults: toolState.results };
   } finally {
     unsubscribe();
+    await streamEvents.drain();
     session.dispose();
   }
 }
 
-export async function runAgent(input: unknown): Promise<RuntimeAgentResult> {
+export async function runAgent(input: unknown, options?: RunAgentOptions): Promise<RuntimeAgentResult> {
   const request = runtimeAgentRequestSchema.parse(input);
+  const streamEvents = createStreamEventEmitter(options);
   assertRuntimeIdentity(request);
   const mediaInsights = await analyzeRuntimeMedia(request.context.media_attachments ?? []);
   const enrichedRequest: RuntimeAgentRequest = {
@@ -215,8 +282,14 @@ export async function runAgent(input: unknown): Promise<RuntimeAgentResult> {
       if (!openAiApiKey()) {
         responseText = placeholderResponse(modelName || defaultModel(), enrichedRequest);
         modelToolResults = [];
+        streamEvents.emit({
+          type: "text_delta",
+          delta: responseText,
+          sequence: 0,
+          payload: { source: "placeholder" },
+        });
       } else {
-        const result = await runPiAttempt(enrichedRequest, modelName, allowedTools, mediaInsights);
+        const result = await runPiAttempt(enrichedRequest, modelName, allowedTools, mediaInsights, streamEvents, options);
         responseText = result.responseText;
         modelToolResults = result.toolResults;
       }
@@ -228,6 +301,7 @@ export async function runAgent(input: unknown): Promise<RuntimeAgentResult> {
       attempts.push({ model: modelName, success: false, error: lastError });
     }
   }
+  await streamEvents.drain();
 
   if (!modelUsed || !responseText) {
     return {

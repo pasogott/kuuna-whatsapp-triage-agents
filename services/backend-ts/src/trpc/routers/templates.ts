@@ -37,6 +37,7 @@ const queueBuildInput = z.object({
   dockerfileSnippet: z.string().nullable().optional(),
   piBashEnabled: z.boolean().nullable().optional(),
   piBashAllowlist: z.array(z.string()).nullable().optional(),
+  gondolinProfile: z.string().nullable().optional(),
 });
 
 type TemplateVersionRow = typeof templateVersions.$inferSelect;
@@ -327,6 +328,7 @@ export const templatesRouter = createTRPCRouter({
           dockerfileSnippet: input.dockerfileSnippet ?? undefined,
           piBashEnabled: input.piBashEnabled ?? undefined,
           piBashAllowlist: input.piBashAllowlist ?? undefined,
+          gondolinProfile: input.gondolinProfile ?? undefined,
         }, { enqueueJob: ctx.enqueueJob }));
       } catch (error) {
         if (error instanceof TemplateBuildValidationError) {

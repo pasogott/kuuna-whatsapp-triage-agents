@@ -53,6 +53,7 @@ export type TemplateVersion = {
     dockerfileSnippet?: string;
     piBashEnabled: boolean;
     piBashAllowlist: string[];
+    gondolinProfile: string;
   };
   updatedAt: string;
   updatedBy: string;

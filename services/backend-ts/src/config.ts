@@ -47,6 +47,8 @@ const envSchema = z.object({
   TEMPLATE_BUILD_CONTEXT_PATH: z.string().default("."),
   TEMPLATE_BUILD_DOCKERFILE_PATH: z.string().default("services/runtime-agent-ts/Dockerfile"),
   RUNTIME_AGENT_TIMEOUT_SECONDS: z.coerce.number().positive().default(300),
+  RUNTIME_EVENT_SINK_URL: z.string().default("http://backend:8000/internal/runtime-events/publish"),
+  RUNTIME_EVENT_SINK_TOKEN: z.string().optional(),
   RUNTIME_DOCKER_SOCKET: z.string().default("/var/run/docker.sock"),
   RUNTIME_DOCKER_NETWORK: z.string().optional(),
   RUNTIME_AGENT_IMAGE: z.string().default("kuuna-runtime-agent-ts:latest"),
@@ -55,6 +57,8 @@ const envSchema = z.object({
   RUNTIME_TOOL_TOKEN: z.string().optional(),
   RUNTIME_CONTAINER_DATA_DIR: z.string().default("/runtime-data"),
   RUNTIME_CONTAINER_DATA_VOLUME_PREFIX: z.string().default("kuuna-runtime-data"),
+  GONDOLIN_PROFILE_ASSETS_CONTAINER_DIR: z.string().default("/gondolin-profiles"),
+  GONDOLIN_PROFILE_ASSETS_HOST_DIR: z.string().optional(),
   RUNTIME_CONTAINER_EXTRA_ENV_JSON: z.string().optional(),
 });
 

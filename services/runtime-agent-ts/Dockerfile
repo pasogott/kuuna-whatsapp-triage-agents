@@ -1,7 +1,11 @@
-ARG BASE_IMAGE=node:22-bookworm
+ARG BASE_IMAGE=node:24-bookworm
 FROM ${BASE_IMAGE}
 
 WORKDIR /workspace
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g pnpm@10.33.2
 

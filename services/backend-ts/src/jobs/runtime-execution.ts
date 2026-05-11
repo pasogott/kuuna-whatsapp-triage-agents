@@ -548,6 +548,7 @@ async function runViaRuntimeAgent(
     })).runtimeBaseUrl.replace(/\/$/, "");
     const context: RuntimeAgentContext = {
       trace_id: input.traceId,
+      agent_run_id: agentRun.id,
       provider_group_id: input.providerGroupId,
       binding_id: input.bindingId,
       agent_instance_id: input.agentInstanceId,
@@ -1170,9 +1171,14 @@ function extractRuntimeConfig(build: TemplateBuildRow | null): RuntimeAgentConfi
     ? inputs.pi_bash_allowlist.filter((item): item is string => typeof item === "string")
     : [];
   const piBashAllowlist = normalizeUniqueStrings(rawAllowlist);
+  const gondolinProfile =
+    typeof inputs.gondolin_profile === "string" && /^[a-z0-9._-]+$/.test(inputs.gondolin_profile.trim().toLowerCase())
+      ? inputs.gondolin_profile.trim().toLowerCase()
+      : "base";
   return {
     pi_bash_enabled: piBashEnabled && piBashAllowlist.length > 0,
     pi_bash_allowlist: piBashAllowlist,
+    gondolin_profile: gondolinProfile,
   };
 }
 
