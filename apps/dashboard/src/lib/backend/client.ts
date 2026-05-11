@@ -2,8 +2,7 @@ import "server-only";
 
 import { createKuunaTrpcClient } from "@kuuna/api-client-ts";
 
-import { createSessionExpiry, getSession, requireSession } from "@/lib/auth/session";
-import type { StaffRole } from "@/lib/permissions/matrix";
+import { currentCookieHeader, getSession, requireSession } from "@/lib/auth/session";
 
 export const BACKEND_URL_CANDIDATES = [
   process.env.BACKEND_BASE_URL,
@@ -52,13 +51,13 @@ export function createInternalBackendTrpcClient() {
 }
 
 export async function createSessionBackendTrpcClient() {
-  const session = await requireSession({ allowMustChangePassword: true });
-  return createBackendTrpcClient(session.backendAccessToken);
+  await requireSession({ allowMustChangePassword: true });
+  return createBackendTrpcClient(undefined, { Cookie: await currentCookieHeader() });
 }
 
 export async function getOptionalSessionBackendTrpcClient() {
   const session = await getSession();
-  return session ? createBackendTrpcClient(session.backendAccessToken) : null;
+  return session ? createBackendTrpcClient(undefined, { Cookie: await currentCookieHeader() }) : null;
 }
 
 export async function bootstrapRequiredAdmin(): Promise<void> {
@@ -67,36 +66,6 @@ export async function bootstrapRequiredAdmin(): Promise<void> {
   } catch (error) {
     console.warn("[dashboard-auth] admin bootstrap failed", error);
   }
-}
-
-export async function loginWithBackend(email: string, password: string) {
-  const errors: string[] = [];
-  for (const backendBaseUrl of BACKEND_URL_CANDIDATES) {
-    const normalizedBaseUrl = backendBaseUrl.replace(/\/$/, "");
-    const client = createKuunaTrpcClient({ baseUrl: normalizedBaseUrl });
-    try {
-      const response = await client.auth.login.mutate({ email, password });
-      const expiry = createSessionExpiry(response.expires_in);
-      return {
-        userId: response.user.id,
-        email: response.user.email,
-        displayName: displayNameFromEmail(response.user.email),
-        role: response.user.role as StaffRole,
-        assignedGroupIds: response.user.group_scope,
-        mustChangePassword: response.user.must_change_password,
-        backendAccessToken: response.access_token,
-        ...expiry,
-      };
-    } catch (error) {
-      const authError = dashboardAuthErrorFromUnknown(error);
-      if (authError && authError.code !== "backend") {
-        throw authError;
-      }
-      errors.push(`${normalizedBaseUrl} -> ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  throw new DashboardAuthError("backend", errors.join(" | ") || "no-backend-url");
 }
 
 export function dashboardAuthErrorFromUnknown(error: unknown): DashboardAuthError | null {
@@ -124,11 +93,4 @@ function errorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
-}
-
-function displayNameFromEmail(email: string): string {
-  const localPart = email.split("@")[0] ?? "staff";
-  return localPart
-    .replace(/[._-]+/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
 }

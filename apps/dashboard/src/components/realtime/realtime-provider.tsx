@@ -6,15 +6,14 @@ import { createKuunaTrpcClient, type KuunaEventSource } from "@kuuna/api-client-
 
 type RealtimeProviderProps = {
   baseUrl: string;
-  token: string;
   children: React.ReactNode;
 };
 
-export function RealtimeProvider({ baseUrl, token, children }: RealtimeProviderProps) {
+export function RealtimeProvider({ baseUrl, children }: RealtimeProviderProps) {
   useEffect(() => {
     const client = createKuunaTrpcClient({
       baseUrl,
-      token,
+      withCredentials: true,
       eventSource: EventSourcePolyfill as unknown as KuunaEventSource,
     });
     const subscription = client.runtimeEvents.onEvent.subscribe(undefined, {
@@ -28,7 +27,7 @@ export function RealtimeProvider({ baseUrl, token, children }: RealtimeProviderP
     return () => {
       subscription.unsubscribe();
     };
-  }, [baseUrl, token]);
+  }, [baseUrl]);
 
   return children;
 }

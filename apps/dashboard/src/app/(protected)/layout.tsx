@@ -12,7 +12,7 @@ export default async function ProtectedLayout({
   const realtimeBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
   return (
-    <RealtimeProvider baseUrl={realtimeBaseUrl} token={session.backendAccessToken}>
+    <RealtimeProvider baseUrl={realtimeBaseUrl}>
       <AppShell session={session}>{children}</AppShell>
     </RealtimeProvider>
   );

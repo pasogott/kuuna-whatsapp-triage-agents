@@ -1,334 +1,237 @@
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-
-import { and, eq, inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { hashPassword, verifyPassword } from "better-auth/crypto";
 
+import { auth } from "./better-auth.js";
 import { getSettings } from "./config.js";
 import type { DbLike } from "./db/client.js";
-import { groupAssignments, roles, userRoles, users } from "./db/schema.js";
+import { groupAssignments, users } from "./db/schema.js";
 
 export type RoleName = "owner" | "admin" | "operator" | "viewer";
-
-export type AccessTokenPayload = {
-  sub: string;
-  role: RoleName;
-  group_scope: string[];
-  iat: number;
-  exp: number;
-};
 
 export type AuthContext = {
   userId: string;
   role: RoleName;
   groupScope: string[];
+  sessionId: string;
+  sessionToken: string;
+  sessionExpiresAt: Date;
 };
 
-export class AccessTokenError extends Error {}
-
-const roleRank: Record<RoleName, number> = {
-  viewer: 0,
-  operator: 1,
-  admin: 2,
-  owner: 3,
+export type AuthContextOptions = {
+  allowMustChangePassword?: boolean;
 };
 
-export function highestRole(roleNames: RoleName[]): RoleName {
-  if (roleNames.length === 0) {
-    return "viewer";
-  }
-  return roleNames.reduce((best, role) => (roleRank[role] > roleRank[best] ? role : best), "viewer");
+export function isRoleName(value: unknown): value is RoleName {
+  return value === "owner" || value === "admin" || value === "operator" || value === "viewer";
 }
 
-export function issueAccessToken(input: {
-  userId: string;
-  role: RoleName;
-  groupScope: string[];
-}): string {
-  const settings = getSettings();
-  const now = Math.floor(Date.now() / 1000);
-  const expiresAt = now + Math.max(60, settings.AUTH_TOKEN_TTL_SECONDS);
-  const payload: AccessTokenPayload = {
-    sub: input.userId,
-    role: input.role,
-    group_scope: Array.from(new Set(input.groupScope)).sort(),
-    iat: now,
-    exp: expiresAt,
-  };
-  const payloadJson = JSON.stringify(payload, Object.keys(payload).sort());
-  const payloadB64 = base64UrlEncode(Buffer.from(payloadJson, "utf8"));
-  const signatureB64 = base64UrlEncode(sign(payloadB64));
-  return `${payloadB64}.${signatureB64}`;
-}
-
-export function decodeAccessToken(token: string): AccessTokenPayload {
-  const parts = token.trim().split(".");
-  if (parts.length !== 2) {
-    throw new AccessTokenError("invalid token format");
-  }
-
-  const [payloadB64, signatureB64] = parts;
-  const expected = sign(payloadB64);
-  const actual = base64UrlDecode(signatureB64);
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-    throw new AccessTokenError("invalid token signature");
-  }
-
-  let raw: unknown;
-  try {
-    raw = JSON.parse(base64UrlDecode(payloadB64).toString("utf8"));
-  } catch (error) {
-    throw new AccessTokenError("invalid token payload", { cause: error });
-  }
-
-  const payload = validatePayload(raw);
-  if (payload.exp <= Math.floor(Date.now() / 1000)) {
-    throw new AccessTokenError("token expired");
-  }
-  return payload;
-}
-
-export function extractBearerToken(headers: Headers): string | null {
-  const header = headers.get("authorization");
-  if (!header?.startsWith("Bearer ")) {
-    return null;
-  }
-  const token = header.slice("Bearer ".length).trim();
-  return token || null;
-}
-
-export function authContextFromHeaders(headers: Headers): AuthContext | null {
-  const token = extractBearerToken(headers);
-  if (!token) {
-    return null;
-  }
-  try {
-    const payload = decodeAccessToken(token);
-    return {
-      userId: payload.sub,
-      role: payload.role,
-      groupScope: payload.group_scope,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function requireAuth(headers: Headers): AuthContext {
-  const token = extractBearerToken(headers);
-  if (!token) {
-    throw new TRPCError({ code: "UNAUTHORIZED", message: "missing bearer token" });
-  }
-  try {
-    const payload = decodeAccessToken(token);
-    return {
-      userId: payload.sub,
-      role: payload.role,
-      groupScope: payload.group_scope,
-    };
-  } catch (error) {
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: error instanceof Error ? error.message : "invalid token",
-    });
-  }
-}
-
-export function requireRole(auth: AuthContext, allowedRoles: RoleName[]): void {
-  if (!allowedRoles.includes(auth.role)) {
+export function requireRole(authContext: AuthContext, allowedRoles: RoleName[]): void {
+  if (!allowedRoles.includes(authContext.role)) {
     throw new TRPCError({ code: "FORBIDDEN", message: "insufficient role" });
   }
 }
 
-export function hashPassword(password: string): string {
-  const salt = randomBytes(16);
-  const derived = scryptSync(password, salt, 64, { N: 2 ** 14, r: 8, p: 1 });
-  return `scrypt$16384$8$1$${salt.toString("hex")}$${derived.toString("hex")}`;
-}
-
-export function verifyPassword(password: string, encodedHash: string): boolean {
-  if (encodedHash.startsWith("scrypt:")) {
-    return verifyLegacyDashboardScryptPassword(password, encodedHash);
-  }
-
-  const [algorithm, nRaw, rRaw, pRaw, saltHex, digestHex] = encodedHash.split("$");
-  if (algorithm !== "scrypt" || !nRaw || !rRaw || !pRaw || !saltHex || !digestHex) {
-    return false;
-  }
-
-  try {
-    const expected = Buffer.from(digestHex, "hex");
-    const derived = scryptSync(password, Buffer.from(saltHex, "hex"), expected.length, {
-      N: Number(nRaw),
-      r: Number(rRaw),
-      p: Number(pRaw),
-    });
-    return expected.length === derived.length && timingSafeEqual(expected, derived);
-  } catch {
-    return false;
-  }
-}
-
-function verifyLegacyDashboardScryptPassword(password: string, encodedHash: string): boolean {
-  const [scheme, saltHex, digestHex] = encodedHash.split(":");
-  if (scheme !== "scrypt" || !saltHex || !digestHex) {
-    return false;
-  }
-
-  try {
-    const expected = Buffer.from(digestHex, "hex");
-    const derived = scryptSync(password, saltHex, expected.length);
-    return expected.length === derived.length && timingSafeEqual(expected, derived);
-  } catch {
-    return false;
-  }
-}
-
 export function passwordPolicyViolations(password: string): string[] {
-  const settings = getSettings();
   const violations: string[] = [];
-
-  if (password.length < settings.AUTH_PASSWORD_MIN_LENGTH) {
-    violations.push(`minimum length is ${settings.AUTH_PASSWORD_MIN_LENGTH}`);
-  }
-  if (password.toLowerCase() === password) {
-    violations.push("must include an uppercase letter");
-  }
-  if (password.toUpperCase() === password) {
-    violations.push("must include a lowercase letter");
-  }
-  if (![...password].some((char) => /\d/.test(char))) {
-    violations.push("must include a digit");
-  }
+  if (password.length < 12) violations.push("minimum length is 12");
+  if (password.toLowerCase() === password) violations.push("must include an uppercase letter");
+  if (password.toUpperCase() === password) violations.push("must include a lowercase letter");
+  if (![...password].some((char) => /\d/.test(char))) violations.push("must include a digit");
   if (![...password].some((char) => !/[A-Za-z0-9]/.test(char))) {
     violations.push("must include a symbol");
   }
+  return violations;
+}
 
-  const maxConsecutive = settings.AUTH_PASSWORD_MAX_CONSECUTIVE;
-  let runLength = 1;
-  for (let index = 1; index < password.length; index += 1) {
-    if (password[index] === password[index - 1]) {
-      runLength += 1;
-      if (runLength > maxConsecutive) {
-        violations.push(`must not repeat the same character more than ${maxConsecutive} times`);
-        break;
-      }
-    } else {
-      runLength = 1;
+export { hashPassword, verifyPassword };
+
+export function extractBearerToken(header: string | null | undefined): string | null {
+  if (!header) return null;
+  const [scheme, token] = header.split(" ");
+  return scheme?.toLowerCase() === "bearer" && token ? token : null;
+}
+
+export function issueAccessToken(payload: {
+  userId: string;
+  role: RoleName;
+  groupScope: string[];
+  expiresAt?: Date;
+}): string {
+  const expiresAt = payload.expiresAt ?? new Date(Date.now() + getSettings().AUTH_TOKEN_TTL_SECONDS * 1000);
+  const body = Buffer.from(
+    JSON.stringify({
+      sub: payload.userId,
+      role: payload.role,
+      group_scope: payload.groupScope,
+      exp: Math.floor(expiresAt.getTime() / 1000),
+    }),
+  ).toString("base64url");
+  const signature = createHmac("sha256", getSettings().BETTER_AUTH_SECRET).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
+export function decodeAccessToken(token: string): {
+  userId: string;
+  role: RoleName;
+  groupScope: string[];
+  expiresAt: Date;
+} | null {
+  const [body, signature] = token.split(".");
+  if (!body || !signature) return null;
+  const expected = createHmac("sha256", getSettings().BETTER_AUTH_SECRET).update(body).digest("base64url");
+  if (!constantTimeEqual(signature, expected)) return null;
+  const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as {
+    sub?: unknown;
+    role?: unknown;
+    group_scope?: unknown;
+    exp?: unknown;
+  };
+  if (typeof parsed.sub !== "string" || !isRoleName(parsed.role) || typeof parsed.exp !== "number") {
+    return null;
+  }
+  const expiresAt = new Date(parsed.exp * 1000);
+  if (expiresAt.getTime() <= Date.now()) return null;
+  return {
+    userId: parsed.sub,
+    role: parsed.role,
+    groupScope: Array.isArray(parsed.group_scope)
+      ? parsed.group_scope.filter((value): value is string => typeof value === "string")
+      : [],
+    expiresAt,
+  };
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+export async function authContextFromHeaders(headers: Headers): Promise<AuthContext | null> {
+  const session = await auth.api.getSession({ headers });
+  if (!session) return null;
+  const scope = await resolveScopeForUserFromId(session.user.id);
+  return {
+    userId: session.user.id,
+    role: scope.role,
+    groupScope: scope.groupScope,
+    sessionId: session.session.id,
+    sessionToken: session.session.token,
+    sessionExpiresAt: session.session.expiresAt,
+  };
+}
+
+export async function requireCurrentAuthContext(
+  database: DbLike,
+  headers: Headers,
+  options: AuthContextOptions = {},
+): Promise<AuthContext> {
+  const session = await auth.api.getSession({ headers });
+  if (!session) {
+    const bearer = decodeAccessToken(extractBearerToken(headers.get("authorization")) ?? "");
+    if (!bearer) {
+      throw new TRPCError({ code: "UNAUTHORIZED", message: "missing session" });
     }
+    const user = await getCurrentUser(database, bearer.userId);
+    if (!user || isUserBanned(user)) {
+      throw new TRPCError({ code: "UNAUTHORIZED", message: "inactive or missing user" });
+    }
+    if (user.mustChangePassword && !options.allowMustChangePassword) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "password change required" });
+    }
+    const scope = await resolveScopeForUser(database, user.id);
+    return {
+      userId: user.id,
+      role: scope.role,
+      groupScope: scope.groupScope,
+      sessionId: "legacy-bearer",
+      sessionToken: "legacy-bearer",
+      sessionExpiresAt: bearer.expiresAt,
+    };
   }
 
-  return violations;
+  const user = await getCurrentUser(database, session.user.id);
+  if (!user) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "inactive or missing user" });
+  }
+  if (isUserBanned(user)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "inactive user" });
+  }
+  if (user.mustChangePassword && !options.allowMustChangePassword) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "password change required" });
+  }
+
+  const scope = await resolveScopeForUser(database, user.id);
+  return {
+    userId: user.id,
+    role: scope.role,
+    groupScope: scope.groupScope,
+    sessionId: session.session.id,
+    sessionToken: session.session.token,
+    sessionExpiresAt: session.session.expiresAt,
+  };
 }
 
 export async function resolveScopeForUser(
   database: DbLike,
   userId: string,
 ): Promise<{ role: RoleName; groupScope: string[] }> {
+  const [user] = await database
+    .select({ role: users.role })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
   const assignments = await database
     .select({ providerGroupId: groupAssignments.providerGroupId })
     .from(groupAssignments)
     .where(eq(groupAssignments.userId, userId));
 
-  const roleRows = await database
-    .select({ name: roles.name })
-    .from(userRoles)
-    .innerJoin(roles, eq(userRoles.roleId, roles.id))
-    .where(eq(userRoles.userId, userId));
-
   return {
-    role: highestRole(roleRows.map((row) => row.name as RoleName)),
+    role: isRoleName(user?.role) ? user.role : "viewer",
     groupScope: assignments.map((row) => row.providerGroupId),
   };
 }
 
-export async function getCurrentUser(database: DbLike, auth: AuthContext) {
-  const [user] = await database
-    .select()
-    .from(users)
-    .where(and(eq(users.id, auth.userId), eq(users.isActive, true)))
-    .limit(1);
+export async function getCurrentUser(database: DbLike, userId: string) {
+  const [user] = await database.select().from(users).where(eq(users.id, userId)).limit(1);
   return user ?? null;
 }
 
 export async function listUserRoles(database: DbLike, userId: string): Promise<RoleName[]> {
-  const rows = await database
-    .select({ name: roles.name })
-    .from(userRoles)
-    .innerJoin(roles, eq(userRoles.roleId, roles.id))
-    .where(eq(userRoles.userId, userId));
-  return rows.map((row) => row.name as RoleName);
+  const scope = await resolveScopeForUser(database, userId);
+  return [scope.role];
 }
 
 export async function filterAuthorizedGroups(
-  auth: AuthContext,
+  authContext: AuthContext,
   providerGroupIds: string[],
 ): Promise<string[]> {
-  if (auth.role === "owner" || auth.role === "admin") {
+  if (authContext.role === "owner" || authContext.role === "admin") {
     return providerGroupIds;
   }
-  const allowed = new Set(auth.groupScope);
+  const allowed = new Set(authContext.groupScope);
   return providerGroupIds.filter((providerGroupId) => allowed.has(providerGroupId));
 }
 
-export function groupScopeWhere(auth: AuthContext, column: unknown) {
-  if (auth.role === "owner" || auth.role === "admin") {
+export function groupScopeWhere(authContext: AuthContext, column: unknown) {
+  if (authContext.role === "owner" || authContext.role === "admin") {
     return undefined;
   }
-  if (auth.groupScope.length === 0) {
+  if (authContext.groupScope.length === 0) {
     return inArray(column as never, ["__kuuna_no_authorized_group__"] as never[]);
   }
-  return inArray(column as never, auth.groupScope as never[]);
+  return inArray(column as never, authContext.groupScope as never[]);
 }
 
-function validatePayload(value: unknown): AccessTokenPayload {
-  if (!value || typeof value !== "object") {
-    throw new AccessTokenError("invalid payload type");
-  }
-  const payload = value as Record<string, unknown>;
-  const sub = payload.sub;
-  const role = payload.role;
-  const groupScope = payload.group_scope;
-  const iat = payload.iat;
-  const exp = payload.exp;
-
-  if (typeof sub !== "string" || !sub) {
-    throw new AccessTokenError("invalid token subject");
-  }
-  if (!isRoleName(role)) {
-    throw new AccessTokenError("invalid token role");
-  }
-  if (!Array.isArray(groupScope) || groupScope.some((item) => typeof item !== "string")) {
-    throw new AccessTokenError("invalid token group scope");
-  }
-  if (typeof iat !== "number" || typeof exp !== "number") {
-    throw new AccessTokenError("invalid token timestamps");
-  }
-
-  return {
-    sub,
-    role,
-    group_scope: groupScope.filter((item): item is string => typeof item === "string" && Boolean(item)),
-    iat,
-    exp,
-  };
+export function isUserBanned(user: typeof users.$inferSelect): boolean {
+  if (!user.banned) return false;
+  return !user.banExpires || user.banExpires.getTime() > Date.now();
 }
 
-function isRoleName(value: unknown): value is RoleName {
-  return value === "owner" || value === "admin" || value === "operator" || value === "viewer";
-}
-
-function sign(payloadB64: string): Buffer {
-  return createHmac("sha256", getSettings().AUTH_TOKEN_SECRET).update(payloadB64).digest();
-}
-
-function base64UrlEncode(value: Buffer): string {
-  return value.toString("base64url");
-}
-
-function base64UrlDecode(value: string): Buffer {
-  try {
-    return Buffer.from(value, "base64url");
-  } catch (error) {
-    throw new AccessTokenError("invalid base64 token segment", { cause: error });
-  }
+async function resolveScopeForUserFromId(userId: string): Promise<{ role: RoleName; groupScope: string[] }> {
+  const { db } = await import("./db/client.js");
+  return resolveScopeForUser(db, userId);
 }

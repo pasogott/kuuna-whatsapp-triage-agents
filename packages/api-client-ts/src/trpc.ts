@@ -13,6 +13,7 @@ export type KuunaTrpcClientOptions = {
   baseUrl: string;
   token?: string;
   headers?: Record<string, string>;
+  withCredentials?: boolean;
   enableLogger?: boolean;
   eventSource?: KuunaEventSource;
 };
@@ -33,11 +34,14 @@ export function createKuunaTrpcClient(options: KuunaTrpcClientOptions): KuunaTrp
         true: httpSubscriptionLink<AppRouter, KuunaEventSource>({
           url: `${normalizedBaseUrl}/trpc`,
           EventSource: EventSourceConstructor,
-          eventSourceOptions: () => ({ headers: headers() }),
+          eventSourceOptions: () => ({ headers: headers(), withCredentials: options.withCredentials }),
         }),
         false: httpLink({
           url: `${normalizedBaseUrl}/trpc`,
           headers,
+          fetch: options.withCredentials
+            ? (url, init) => fetch(url, { ...init, credentials: "include" })
+            : undefined,
         }),
       }),
     ],

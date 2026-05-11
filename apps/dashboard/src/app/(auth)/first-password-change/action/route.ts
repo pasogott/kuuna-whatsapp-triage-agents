@@ -1,5 +1,5 @@
-import { getSession, setSessionCookie } from "@/lib/auth/session";
-import { createBackendTrpcClient, dashboardAuthErrorFromUnknown } from "@/lib/backend/client";
+import { getSession } from "@/lib/auth/session";
+import { createSessionBackendTrpcClient, dashboardAuthErrorFromUnknown } from "@/lib/backend/client";
 
 function redirect303(path: string, request: Request) {
   const location = new URL(path, request.url);
@@ -44,15 +44,10 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    const client = createBackendTrpcClient(session.backendAccessToken);
-    const user = await client.auth.changePassword.mutate({
+    const client = await createSessionBackendTrpcClient();
+    await client.auth.changePassword.mutate({
       currentPassword,
       newPassword: nextPassword,
-    });
-
-    await setSessionCookie({
-      ...session,
-      mustChangePassword: user.must_change_password,
     });
 
     return redirect303("/overview?passwordChanged=1", request);

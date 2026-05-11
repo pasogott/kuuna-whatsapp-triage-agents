@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres, { type Sql } from "postgres";
+import { hashPassword } from "better-auth/crypto";
 
-import { hashPassword, type RoleName } from "../src/auth.js";
+import type { RoleName } from "../src/auth.js";
 import { resetSettingsForTests } from "../src/config.js";
 import type { Database } from "../src/db/client.js";
 import { appRouter } from "../src/trpc/routers/_app.js";
@@ -47,7 +48,7 @@ export type ContractHarness = {
 export async function createContractHarness(): Promise<ContractHarness> {
   assert.ok(contractDatabaseUrl, "BACKEND_TS_CONTRACT_DATABASE_URL is required for contract tests");
 
-  process.env.AUTH_TOKEN_SECRET = process.env.AUTH_TOKEN_SECRET || "backend-ts-contract-secret";
+  process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "backend-ts-contract-secret";
   resetSettingsForTests();
 
   const schemaName = `backend_ts_contract_${randomUUID().replaceAll("-", "_")}`;
@@ -104,21 +105,23 @@ export async function createContractHarness(): Promise<ContractHarness> {
         .insert(schema.users)
         .values({
           email: input.email.toLowerCase(),
-          passwordHash: hashPassword(input.password),
+          emailVerified: true,
+          name: input.email.toLowerCase(),
+          role,
+          banned: !(input.isActive ?? true),
+          banReason: input.isActive === false ? "test inactive" : null,
+          banExpires: null,
           mustChangePassword: input.mustChangePassword ?? false,
-          isActive: input.isActive ?? true,
         })
         .returning({ id: schema.users.id, email: schema.users.email });
       assert.ok(user);
 
-      const [roleRow] = await db
-        .insert(schema.roles)
-        .values({ name: role })
-        .onConflictDoUpdate({ target: schema.roles.name, set: { name: role } })
-        .returning({ id: schema.roles.id });
-      assert.ok(roleRow);
-
-      await db.insert(schema.userRoles).values({ userId: user.id, roleId: roleRow.id });
+      await db.insert(schema.account).values({
+        userId: user.id,
+        providerId: "credential",
+        accountId: user.id,
+        password: await hashPassword(input.password),
+      });
       for (const providerGroupId of Array.from(new Set(input.groupScope ?? [])).sort()) {
         await db.insert(schema.groupAssignments).values({ userId: user.id, providerGroupId });
       }
@@ -136,30 +139,59 @@ async function createContractTables(sql: Sql): Promise<void> {
   await sql.unsafe(`
     create extension if not exists pgcrypto;
     create extension if not exists vector;
+    create type role_name as enum ('owner', 'admin', 'operator', 'viewer');
 
     create table users (
       id uuid primary key default gen_random_uuid(),
       email text not null unique,
-      password_hash text not null,
+      email_verified boolean not null default false,
+      name text not null,
+      image text,
+      role role_name not null default 'viewer',
+      banned boolean not null default false,
+      ban_reason text,
+      ban_expires timestamptz,
       must_change_password boolean not null default true,
-      is_active boolean not null default true,
-      failed_login_attempts integer not null default 0,
-      locked_until timestamptz,
-      password_changed_at timestamptz,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     );
 
-    create table roles (
+    create table session (
       id uuid primary key default gen_random_uuid(),
-      name text not null unique
+      user_id uuid not null,
+      token text not null unique,
+      expires_at timestamptz not null,
+      ip_address text,
+      user_agent text,
+      impersonated_by uuid,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
     );
 
-    create table user_roles (
+    create table account (
       id uuid primary key default gen_random_uuid(),
-      user_id uuid not null references users(id) on delete cascade,
-      role_id uuid not null references roles(id) on delete cascade,
-      unique (user_id, role_id)
+      user_id uuid not null,
+      account_id text not null,
+      provider_id text not null,
+      access_token text,
+      refresh_token text,
+      id_token text,
+      access_token_expires_at timestamptz,
+      refresh_token_expires_at timestamptz,
+      scope text,
+      password text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique (provider_id, account_id)
+    );
+
+    create table verification (
+      id uuid primary key default gen_random_uuid(),
+      identifier text not null,
+      value text not null,
+      expires_at timestamptz not null,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
     );
 
     create table group_assignments (

@@ -1,16 +1,20 @@
 import { TRPCError } from "@trpc/server";
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { hashPassword } from "better-auth/crypto";
 import { z } from "zod";
 
+import { passwordPolicyViolations, type RoleName } from "../../auth.js";
 import type { DbLike } from "../../db/client.js";
-import { auditEvents, roles, userRoles, users, groupAssignments } from "../../db/schema.js";
-import { hashPassword, passwordPolicyViolations, type RoleName } from "../../auth.js";
+import { account, auditEvents, groupAssignments, session, users } from "../../db/schema.js";
+import { getSettings } from "../../config.js";
 import { createTRPCRouter, roleProcedure } from "../init.js";
+
+const roleInput = z.enum(["owner", "admin", "operator", "viewer"]);
 
 const userCreateInput = z.object({
   email: z.string().trim().email().max(320),
   password: z.string().min(8).max(255),
-  roles: z.array(z.enum(["owner", "admin", "operator", "viewer"])).default(["viewer"]),
+  roles: z.array(roleInput).default(["viewer"]),
   groupScope: z.array(z.string().trim().min(1).max(255)).default([]),
   mustChangePassword: z.boolean().default(true),
   isActive: z.boolean().default(true),
@@ -26,21 +30,11 @@ const userIdInput = z.object({
   userId: z.string().uuid(),
 });
 
-async function replaceRoles(database: DbLike, userId: string, roleNames: RoleName[]) {
-  const uniqueRoles = Array.from(new Set(roleNames.length ? roleNames : ["viewer"])).sort() as RoleName[];
-  await database.delete(userRoles).where(eq(userRoles.userId, userId));
-  const roleRows = await database.select().from(roles).where(inArray(roles.name, uniqueRoles));
-  const existing = new Map(roleRows.map((role) => [role.name, role.id]));
-  for (const roleName of uniqueRoles) {
-    let roleId = existing.get(roleName);
-    if (!roleId) {
-      const [role] = await database.insert(roles).values({ name: roleName }).returning();
-      roleId = role?.id;
-    }
-    if (roleId) {
-      await database.insert(userRoles).values({ userId, roleId });
-    }
-  }
+function highestRole(roleNames: RoleName[]): RoleName {
+  if (roleNames.includes("owner")) return "owner";
+  if (roleNames.includes("admin")) return "admin";
+  if (roleNames.includes("operator")) return "operator";
+  return "viewer";
 }
 
 async function replaceAssignments(database: DbLike, userId: string, groupScope: string[]) {
@@ -50,27 +44,64 @@ async function replaceAssignments(database: DbLike, userId: string, groupScope: 
   }
 }
 
+function isRequiredAdminEmail(email: string): boolean {
+  return email.toLowerCase() === getSettings().REQUIRED_ADMIN_EMAIL.toLowerCase();
+}
+
+function isPrivilegedRole(roleName: string): boolean {
+  return roleName === "owner" || roleName === "admin";
+}
+
+async function activePrivilegedUserCount(database: DbLike, excludeUserId?: string): Promise<number> {
+  const rows = await database.select({ id: users.id, role: users.role, banned: users.banned }).from(users);
+  return rows.filter((row) => row.id !== excludeUserId && !row.banned && isPrivilegedRole(row.role)).length;
+}
+
+async function assertCanRemoveActiveAccess(
+  database: DbLike,
+  target: typeof users.$inferSelect,
+  operation: "deactivate" | "delete",
+): Promise<void> {
+  if (isRequiredAdminEmail(target.email)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `cannot ${operation} required admin account`,
+    });
+  }
+  if (target.banned || !isPrivilegedRole(target.role)) {
+    return;
+  }
+  if ((await activePrivilegedUserCount(database, target.id)) < 1) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `cannot ${operation} last active privileged user`,
+    });
+  }
+}
+
+function formatUser(
+  user: typeof users.$inferSelect,
+  assignmentRows: Array<typeof groupAssignments.$inferSelect> = [],
+) {
+  return {
+    id: user.id,
+    email: user.email,
+    must_change_password: user.mustChangePassword,
+    is_active: !user.banned,
+    roles: [user.role],
+    group_scope: assignmentRows
+      .filter((assignment) => assignment.userId === user.id)
+      .map((assignment) => assignment.providerGroupId),
+    created_at: user.createdAt.toISOString(),
+    updated_at: user.updatedAt.toISOString(),
+  };
+}
+
 export const usersRouter = createTRPCRouter({
   list: roleProcedure("owner", "admin").query(async ({ ctx }) => {
     const rows = await ctx.db.select().from(users).orderBy(users.email);
-    const roleRows = await ctx.db
-      .select({ userId: userRoles.userId, role: roles.name })
-      .from(userRoles)
-      .innerJoin(roles, eq(userRoles.roleId, roles.id));
     const assignmentRows = await ctx.db.select().from(groupAssignments);
-
-    return rows.map((user) => ({
-      id: user.id,
-      email: user.email,
-      must_change_password: user.mustChangePassword,
-      is_active: user.isActive,
-      roles: roleRows.filter((role) => role.userId === user.id).map((role) => role.role),
-      group_scope: assignmentRows
-        .filter((assignment) => assignment.userId === user.id)
-        .map((assignment) => assignment.providerGroupId),
-      created_at: user.createdAt.toISOString(),
-      updated_at: user.updatedAt.toISOString(),
-    }));
+    return rows.map((user) => formatUser(user, assignmentRows));
   }),
 
   assignments: roleProcedure("owner", "admin").query(async ({ ctx }) => {
@@ -112,37 +143,42 @@ export const usersRouter = createTRPCRouter({
     if (existing) {
       throw new TRPCError({ code: "CONFLICT", message: "email already exists" });
     }
+
+    const role = highestRole(input.roles);
+    const password = await hashPassword(input.password);
     const [user] = await ctx.db
       .insert(users)
       .values({
         email: normalizedEmail,
-        passwordHash: hashPassword(input.password),
+        emailVerified: true,
+        name: normalizedEmail,
+        role,
+        banned: !input.isActive,
+        banReason: input.isActive ? null : "deactivated by admin",
+        banExpires: null,
         mustChangePassword: input.mustChangePassword,
-        isActive: input.isActive,
-        passwordChangedAt: new Date(),
       })
       .returning();
     if (!user) {
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "user creation failed" });
     }
-    await replaceRoles(ctx.db, user.id, input.roles);
+    await ctx.db.insert(account).values({
+      userId: user.id,
+      providerId: "credential",
+      accountId: user.id,
+      password,
+    });
     await replaceAssignments(ctx.db, user.id, input.groupScope);
     await ctx.db.insert(auditEvents).values({
       actorUserId: ctx.auth.userId,
       eventType: "user.created",
       entityType: "user",
       entityId: user.id,
-      payload: { email: user.email, roles: input.roles },
+      payload: { email: user.email, roles: [role] },
     });
     return {
-      id: user.id,
-      email: user.email,
-      is_active: user.isActive,
-      must_change_password: user.mustChangePassword,
-      roles: input.roles,
+      ...formatUser(user),
       group_scope: input.groupScope,
-      created_at: user.createdAt.toISOString(),
-      updated_at: user.updatedAt.toISOString(),
     };
   }),
 
@@ -154,13 +190,20 @@ export const usersRouter = createTRPCRouter({
     if (!before) {
       throw new TRPCError({ code: "NOT_FOUND", message: "user not found" });
     }
+    if (input.isActive === false && !before.banned) {
+      await assertCanRemoveActiveAccess(ctx.db, before, "deactivate");
+    }
     const [user] = await ctx.db
       .update(users)
       .set({
-        ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-        ...(input.mustChangePassword !== undefined
-          ? { mustChangePassword: input.mustChangePassword }
+        ...(input.isActive !== undefined
+          ? {
+              banned: !input.isActive,
+              banReason: input.isActive ? null : "deactivated by admin",
+              banExpires: null,
+            }
           : {}),
+        ...(input.mustChangePassword !== undefined ? { mustChangePassword: input.mustChangePassword } : {}),
         updatedAt: new Date(),
       })
       .where(eq(users.id, input.userId))
@@ -175,23 +218,16 @@ export const usersRouter = createTRPCRouter({
       entityId: user.id,
       payload: {
         before: {
-          is_active: before.isActive,
+          is_active: !before.banned,
           must_change_password: before.mustChangePassword,
         },
         after: {
-          is_active: user.isActive,
+          is_active: !user.banned,
           must_change_password: user.mustChangePassword,
         },
       },
     });
-    return {
-      id: user.id,
-      email: user.email,
-      is_active: user.isActive,
-      must_change_password: user.mustChangePassword,
-      created_at: user.createdAt.toISOString(),
-      updated_at: user.updatedAt.toISOString(),
-    };
+    return formatUser(user);
   }),
 
   delete: roleProcedure("owner", "admin").input(userIdInput).mutation(async ({ ctx, input }) => {
@@ -205,6 +241,7 @@ export const usersRouter = createTRPCRouter({
     if (!user) {
       throw new TRPCError({ code: "NOT_FOUND", message: "user not found" });
     }
+    await assertCanRemoveActiveAccess(ctx.db, user, "delete");
 
     await ctx.db.insert(auditEvents).values({
       actorUserId: ctx.auth.userId,
@@ -214,7 +251,8 @@ export const usersRouter = createTRPCRouter({
       payload: { email: user.email },
     });
     await ctx.db.delete(groupAssignments).where(eq(groupAssignments.userId, user.id));
-    await ctx.db.delete(userRoles).where(eq(userRoles.userId, user.id));
+    await ctx.db.delete(session).where(eq(session.userId, user.id));
+    await ctx.db.delete(account).where(eq(account.userId, user.id));
     await ctx.db.delete(users).where(eq(users.id, user.id));
     return { deleted: true };
   }),

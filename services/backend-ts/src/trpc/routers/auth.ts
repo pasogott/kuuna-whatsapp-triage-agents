@@ -1,19 +1,18 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 
+import { getSettings } from "../../config.js";
 import {
   getCurrentUser,
   issueAccessToken,
   passwordPolicyViolations,
   resolveScopeForUser,
   verifyPassword,
-  hashPassword,
 } from "../../auth.js";
-import { getSettings } from "../../config.js";
-import { auditEvents, users } from "../../db/schema.js";
-import { loginRateLimiter } from "../../rate-limit.js";
-import { createTRPCRouter, protectedProcedure, publicProcedure } from "../init.js";
+import { auth } from "../../better-auth.js";
+import { account, users } from "../../db/schema.js";
+import { createTRPCRouter, publicProcedure, sessionProcedure } from "../init.js";
 
 const loginInput = z.object({
   email: z.string().email(),
@@ -22,92 +21,51 @@ const loginInput = z.object({
 
 const changePasswordInput = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(8),
+  newPassword: z.string().min(8).max(255),
 });
 
 export const authRouter = createTRPCRouter({
   login: publicProcedure.input(loginInput).mutation(async ({ ctx, input }) => {
-    loginRateLimiter.record(ctx.clientIp);
-
-    const [user] = await ctx.db
-      .select()
+    const normalizedEmail = input.email.toLowerCase();
+    const [row] = await ctx.db
+      .select({
+        user: users,
+        password: account.password,
+      })
       .from(users)
-      .where(eq(users.email, input.email.toLowerCase()))
+      .innerJoin(account, eq(account.userId, users.id))
+      .where(eq(users.email, normalizedEmail))
       .limit(1);
-
-    if (!user) {
+    if (!row?.password || !(await verifyPassword({ password: input.password, hash: row.password }))) {
       throw new TRPCError({ code: "UNAUTHORIZED", message: "invalid credentials" });
     }
-
-    if (!user.isActive) {
+    if (row.user.banned) {
       throw new TRPCError({ code: "FORBIDDEN", message: "inactive user" });
     }
-
-    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
-      throw new TRPCError({ code: "FORBIDDEN", message: "user locked" });
-    }
-
-    if (!verifyPassword(input.password, user.passwordHash)) {
-      const failedLoginAttempts = user.failedLoginAttempts + 1;
-      const settings = getSettings();
-      const lockedUntil =
-        failedLoginAttempts >= settings.AUTH_LOCKOUT_THRESHOLD
-          ? new Date(Date.now() + settings.AUTH_LOCKOUT_SECONDS * 1000)
-          : null;
-
-      await ctx.db
-        .update(users)
-        .set({
-          failedLoginAttempts: lockedUntil ? 0 : failedLoginAttempts,
-          lockedUntil,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, user.id));
-
-      if (lockedUntil) {
-        await ctx.db.insert(auditEvents).values({
-          eventType: "auth.account_locked",
-          entityType: "user",
-          entityId: user.id,
-          payload: {
-            locked_until: lockedUntil.toISOString(),
-            lockout_seconds: settings.AUTH_LOCKOUT_SECONDS,
-          },
-        });
-      }
-
-      throw new TRPCError({ code: "UNAUTHORIZED", message: "invalid credentials" });
-    }
-
-    await ctx.db
-      .update(users)
-      .set({ failedLoginAttempts: 0, lockedUntil: null, updatedAt: new Date() })
-      .where(eq(users.id, user.id));
-
-    const scope = await resolveScopeForUser(ctx.db, user.id);
+    const scope = await resolveScopeForUser(ctx.db, row.user.id);
     return {
       access_token: issueAccessToken({
-        userId: user.id,
+        userId: row.user.id,
         role: scope.role,
         groupScope: scope.groupScope,
       }),
       token_type: "bearer",
       expires_in: getSettings().AUTH_TOKEN_TTL_SECONDS,
       user: {
-        id: user.id,
-        email: user.email,
-        must_change_password: user.mustChangePassword,
+        id: row.user.id,
+        email: row.user.email,
+        must_change_password: row.user.mustChangePassword,
         role: scope.role,
         group_scope: scope.groupScope,
       },
     };
   }),
 
-  me: protectedProcedure.query(async ({ ctx }) => {
+  me: sessionProcedure.query(async ({ ctx }) => {
     if (!ctx.auth) {
       throw new TRPCError({ code: "UNAUTHORIZED", message: "missing auth context" });
     }
-    const user = await getCurrentUser(ctx.db, ctx.auth);
+    const user = await getCurrentUser(ctx.db, ctx.auth.userId);
     if (!user) {
       throw new TRPCError({ code: "UNAUTHORIZED", message: "inactive or missing user" });
     }
@@ -116,26 +74,16 @@ export const authRouter = createTRPCRouter({
       id: user.id,
       email: user.email,
       must_change_password: user.mustChangePassword,
-      is_active: user.isActive,
+      is_active: !user.banned,
       role: scope.role,
       group_scope: scope.groupScope,
     };
   }),
 
-  changePassword: protectedProcedure.input(changePasswordInput).mutation(async ({ ctx, input }) => {
+  changePassword: sessionProcedure.input(changePasswordInput).mutation(async ({ ctx, input }) => {
     if (!ctx.auth) {
       throw new TRPCError({ code: "UNAUTHORIZED", message: "missing auth context" });
     }
-    const [user] = await ctx.db
-      .select()
-      .from(users)
-      .where(and(eq(users.id, ctx.auth.userId), eq(users.isActive, true)))
-      .limit(1);
-
-    if (!user || !verifyPassword(input.currentPassword, user.passwordHash)) {
-      throw new TRPCError({ code: "UNAUTHORIZED", message: "invalid current password" });
-    }
-
     const violations = passwordPolicyViolations(input.newPassword);
     if (violations.length > 0) {
       throw new TRPCError({
@@ -144,21 +92,37 @@ export const authRouter = createTRPCRouter({
       });
     }
 
-    await ctx.db
+    try {
+      await auth.api.changePassword({
+        headers: ctx.headers,
+        body: {
+          currentPassword: input.currentPassword,
+          newPassword: input.newPassword,
+          revokeOtherSessions: true,
+        },
+      });
+    } catch (error) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: error instanceof Error ? error.message : "invalid current password",
+      });
+    }
+
+    const [user] = await ctx.db
       .update(users)
-      .set({
-        passwordHash: hashPassword(input.newPassword),
-        mustChangePassword: false,
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, user.id));
+      .set({ mustChangePassword: false, updatedAt: new Date() })
+      .where(eq(users.id, ctx.auth.userId))
+      .returning();
+    if (!user) {
+      throw new TRPCError({ code: "UNAUTHORIZED", message: "inactive or missing user" });
+    }
 
     const scope = await resolveScopeForUser(ctx.db, user.id);
     return {
       id: user.id,
       email: user.email,
       must_change_password: false,
-      is_active: user.isActive,
+      is_active: !user.banned,
       role: scope.role,
       group_scope: scope.groupScope,
     };

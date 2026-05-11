@@ -112,26 +112,54 @@ END $$;
 CREATE TABLE IF NOT EXISTS users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   email text NOT NULL UNIQUE,
-  password_hash text NOT NULL,
+  email_verified boolean NOT NULL DEFAULT false,
+  name text NOT NULL,
+  image text,
+  role role_name NOT NULL DEFAULT 'viewer',
+  banned boolean NOT NULL DEFAULT false,
+  ban_reason text,
+  ban_expires timestamptz,
   must_change_password boolean NOT NULL DEFAULT true,
-  is_active boolean NOT NULL DEFAULT true,
-  failed_login_attempts integer NOT NULL DEFAULT 0,
-  locked_until timestamptz,
-  password_changed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS roles (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  name role_name NOT NULL UNIQUE
-);
-
-CREATE TABLE IF NOT EXISTS user_roles (
+CREATE TABLE IF NOT EXISTS session (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role_id uuid NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-  UNIQUE (user_id, role_id)
+  token text NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  ip_address text,
+  user_agent text,
+  impersonated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS account (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  account_id text NOT NULL,
+  provider_id text NOT NULL,
+  access_token text,
+  refresh_token text,
+  id_token text,
+  access_token_expires_at timestamptz,
+  refresh_token_expires_at timestamptz,
+  scope text,
+  password text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (provider_id, account_id)
+);
+
+CREATE TABLE IF NOT EXISTS verification (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  identifier text NOT NULL,
+  value text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS group_assignments (

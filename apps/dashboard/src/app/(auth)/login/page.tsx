@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 
@@ -60,17 +59,6 @@ export default async function LoginPage({
     <AuthShell
       title="Staff sign in"
       description="Use your staff account. New users must change their password at first sign-in."
-      footer={
-        <p>
-          Account locked?{" "}
-          <Link
-            href="/locked"
-            className="font-medium text-primary underline-offset-4 hover:underline"
-          >
-            See lockout guidance
-          </Link>
-        </p>
-      }
     >
       {loggedOut ? (
         <div className="mb-5 flex items-start gap-2.5 rounded-md border border-[color:color-mix(in_oklab,var(--success-500)_28%,transparent)] bg-[color:var(--success-50)] px-3 py-2.5 text-sm text-[color:var(--success-700)]">
@@ -117,17 +105,6 @@ export default async function LoginPage({
         </FormActions>
       </form>
 
-      <p className="mt-6 text-xs text-muted-foreground">
-        Credentials are validated against the PostgreSQL{" "}
-        <code className="rounded-sm border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.7rem]">
-          users
-        </code>{" "}
-        table. Required bootstrap admin:{" "}
-        <code className="rounded-sm border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.7rem]">
-          admin@kuuna.ai
-        </code>
-        .
-      </p>
     </AuthShell>
   );
 }

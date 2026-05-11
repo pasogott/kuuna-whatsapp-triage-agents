@@ -1,8 +1,9 @@
 import "server-only";
 
-import { cookies } from "next/headers";
+import { createKuunaTrpcClient } from "@kuuna/api-client-ts";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+
 import {
   canRole,
   isAdminRole,
@@ -18,121 +19,61 @@ export type StaffSession = {
   role: StaffRole;
   assignedGroupIds: string[];
   mustChangePassword: boolean;
-  backendAccessToken: string;
-  backendTokenExpiresAt: string;
   sessionExpiresAt: string;
 };
 
-export const SESSION_COOKIE_NAME = "kuuna_dashboard_session";
-const SESSION_VERSION = "v1";
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 8;
-const ALGORITHM = "aes-256-gcm";
-
-function encodeSession(session: StaffSession): string {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv(ALGORITHM, sessionKey(), iv);
-  const ciphertext = Buffer.concat([
-    cipher.update(JSON.stringify(session), "utf8"),
-    cipher.final(),
-  ]);
-  const tag = cipher.getAuthTag();
-  return [
-    SESSION_VERSION,
-    iv.toString("base64url"),
-    tag.toString("base64url"),
-    ciphertext.toString("base64url"),
-  ].join(".");
-}
-
-function decodeSession(raw: string): StaffSession | null {
-  try {
-    const [version, ivRaw, tagRaw, ciphertextRaw] = raw.split(".");
-    if (version !== SESSION_VERSION || !ivRaw || !tagRaw || !ciphertextRaw) {
-      return null;
-    }
-
-    const decipher = createDecipheriv(ALGORITHM, sessionKey(), Buffer.from(ivRaw, "base64url"));
-    decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
-    const decrypted = Buffer.concat([
-      decipher.update(Buffer.from(ciphertextRaw, "base64url")),
-      decipher.final(),
-    ]);
-    const parsed = JSON.parse(decrypted.toString("utf8"));
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-
-    const email = typeof parsed.email === "string" ? parsed.email : "";
-    const role = typeof parsed.role === "string" ? parsed.role : "viewer";
-
-    if (!email) {
-      return null;
-    }
-
-    const backendAccessToken =
-      typeof parsed.backendAccessToken === "string" && parsed.backendAccessToken.length > 0
-        ? parsed.backendAccessToken
-        : "";
-    const backendTokenExpiresAt =
-      typeof parsed.backendTokenExpiresAt === "string" ? parsed.backendTokenExpiresAt : "";
-    const sessionExpiresAt =
-      typeof parsed.sessionExpiresAt === "string" ? parsed.sessionExpiresAt : "";
-
-    if (!backendAccessToken || !isFutureIsoDate(backendTokenExpiresAt) || !isFutureIsoDate(sessionExpiresAt)) {
-      return null;
-    }
-
-    return {
-      userId:
-        typeof parsed.userId === "string" && parsed.userId.length > 0
-          ? parsed.userId
-          : `legacy:${email}`,
-      email,
-      displayName:
-        typeof parsed.displayName === "string" && parsed.displayName.length > 0
-          ? parsed.displayName
-          : email,
-      role: role as StaffRole,
-      assignedGroupIds: Array.isArray(parsed.assignedGroupIds)
-        ? parsed.assignedGroupIds.filter(
-            (value: unknown): value is string => typeof value === "string",
-          )
-        : [],
-      mustChangePassword: Boolean(parsed.mustChangePassword),
-      backendAccessToken,
-      backendTokenExpiresAt,
-      sessionExpiresAt,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export async function setSessionCookie(session: StaffSession): Promise<void> {
-  const cookieStore = await cookies();
-  const maxAge = secondsUntil(session.sessionExpiresAt);
-  cookieStore.set(SESSION_COOKIE_NAME, encodeSession(session), {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    secure: process.env.NODE_ENV === "production",
-    maxAge: Math.max(1, Math.min(SESSION_MAX_AGE_SECONDS, maxAge)),
-  });
-}
-
-export async function clearSessionCookie(): Promise<void> {
-  const cookieStore = await cookies();
-  cookieStore.delete(SESSION_COOKIE_NAME);
-}
+type BackendSessionResponse = {
+  session?: {
+    expiresAt?: string | Date;
+  };
+  user?: {
+    id?: string;
+    email?: string;
+    name?: string | null;
+    role?: string | null;
+    mustChangePassword?: boolean | null;
+  };
+} | null;
 
 export async function getSession(): Promise<StaffSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) {
-    return null;
-  }
+  const cookieHeader = await currentCookieHeader();
+  if (!cookieHeader) return null;
 
-  return decodeSession(raw);
+  const baseUrl = process.env.BACKEND_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/auth/get-session`, {
+    cache: "no-store",
+    headers: { Cookie: cookieHeader },
+  });
+  if (!response.ok) return null;
+
+  const data = (await response.json().catch(() => null)) as BackendSessionResponse;
+  const user = data?.user;
+  const expiresAt = data?.session?.expiresAt;
+  if (!user?.id || !user.email || !expiresAt) return null;
+  const client = createKuunaTrpcClient({
+    baseUrl,
+    headers: { Cookie: cookieHeader },
+  });
+  const appUser = await client.auth.me.query().catch(() => null);
+  if (!appUser) return null;
+
+  const sessionExpiresAt = new Date(expiresAt).toISOString();
+  if (Date.parse(sessionExpiresAt) <= Date.now()) return null;
+
+  return {
+    userId: user.id,
+    email: user.email,
+    displayName: user.name || displayNameFromEmail(user.email),
+    role: isStaffRole(appUser.role) ? appUser.role : "viewer",
+    assignedGroupIds: appUser.group_scope,
+    mustChangePassword: appUser.must_change_password,
+    sessionExpiresAt,
+  };
+}
+
+export async function currentCookieHeader(): Promise<string> {
+  const headerStore = await headers();
+  return headerStore.get("cookie") ?? "";
 }
 
 export async function requireSession(options?: {
@@ -151,38 +92,15 @@ export async function requireSession(options?: {
   return session;
 }
 
-function sessionKey(): Buffer {
-  const secret = process.env.DASHBOARD_SESSION_SECRET;
-  if (!secret && process.env.NODE_ENV === "production") {
-    throw new Error("DASHBOARD_SESSION_SECRET is required in production");
-  }
-  return createHash("sha256")
-    .update(secret || "dev-insecure-dashboard-session-secret")
-    .digest();
+function isStaffRole(value: unknown): value is StaffRole {
+  return value === "owner" || value === "admin" || value === "operator" || value === "viewer";
 }
 
-function isFutureIsoDate(value: string): boolean {
-  return secondsUntil(value) > 0;
-}
-
-function secondsUntil(value: string): number {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) {
-    return 0;
-  }
-  return Math.floor((timestamp - Date.now()) / 1000);
-}
-
-export function createSessionExpiry(expiresInSeconds: number): {
-  backendTokenExpiresAt: string;
-  sessionExpiresAt: string;
-} {
-  const bounded = Math.max(60, Math.min(SESSION_MAX_AGE_SECONDS, expiresInSeconds));
-  const expiresAt = new Date(Date.now() + bounded * 1000).toISOString();
-  return {
-    backendTokenExpiresAt: expiresAt,
-    sessionExpiresAt: expiresAt,
-  };
+function displayNameFromEmail(email: string): string {
+  const localPart = email.split("@")[0] ?? "staff";
+  return localPart
+    .replace(/[._-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 export function hasPermission(

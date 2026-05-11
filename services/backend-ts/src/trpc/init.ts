@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 
-import { requireAuth, type AuthContext, type RoleName } from "../auth.js";
+import { requireCurrentAuthContext, type AuthContext, type RoleName } from "../auth.js";
 import { db, type Database, type DbLike } from "../db/client.js";
 import type { EnqueueKuunaJob, RuntimeChatTaskQueueClient } from "../jobs/queues.js";
 import { applyRlsContext } from "../rls.js";
@@ -50,8 +50,8 @@ export const createTRPCRouter = t.router;
 export const createCallerFactory = t.createCallerFactory;
 export const publicProcedure = t.procedure;
 
-export const authenticatedProcedure = t.procedure.use(({ ctx, next }) => {
-  const auth = requireAuth(ctx.headers);
+export const authenticatedProcedure = t.procedure.use(async ({ ctx, next }) => {
+  const auth = await requireCurrentAuthContext(ctx.rootDb, ctx.headers);
   return next({
     ctx: {
       ...ctx,
@@ -60,21 +60,29 @@ export const authenticatedProcedure = t.procedure.use(({ ctx, next }) => {
   });
 });
 
-export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
-  const auth = requireAuth(ctx.headers);
-  return ctx.rootDb.transaction(async (tx) => {
-    await applyRlsContext(tx, auth);
-    return next({
-      ctx: {
-        ...ctx,
-        rootDb: ctx.rootDb,
-        db: tx,
-        auth,
-        enqueueJob: ctx.enqueueJob,
-        runtimeChatQueue: ctx.runtimeChatQueue,
-      },
+function protectedProcedureWithOptions(options: { allowMustChangePassword?: boolean } = {}) {
+  return t.procedure.use(async ({ ctx, next }) => {
+    return ctx.rootDb.transaction(async (tx) => {
+      const auth = await requireCurrentAuthContext(tx, ctx.headers, options);
+      await applyRlsContext(tx, auth);
+      return next({
+        ctx: {
+          ...ctx,
+          rootDb: ctx.rootDb,
+          db: tx,
+          auth,
+          enqueueJob: ctx.enqueueJob,
+          runtimeChatQueue: ctx.runtimeChatQueue,
+        },
+      });
     });
   });
+}
+
+export const protectedProcedure = protectedProcedureWithOptions();
+
+export const sessionProcedure = protectedProcedureWithOptions({
+  allowMustChangePassword: true,
 });
 
 export function roleProcedure(...allowedRoles: RoleName[]) {
