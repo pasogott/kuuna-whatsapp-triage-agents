@@ -18,23 +18,21 @@ Staff dashboard built with Next.js 15 + TypeScript.
 
 ## Development
 
-### Database-backed auth/data (new)
+### Backend auth
 
-The dashboard now attempts to read from PostgreSQL directly on server-side pages/actions.
-It tries these connection strings in order:
+The dashboard authenticates through the backend Better Auth endpoints and forwards
+the Better Auth cookie for server-side tRPC calls. Staff role and group scope are
+hydrated from backend `auth.me`.
 
-1. `DATABASE_URL`
-2. `DASHBOARD_DATABASE_URL`
-3. `postgresql://postgres:postgres@postgres:5432/kuuna`
-4. `postgresql://postgres:postgres@localhost:5432/kuuna`
-
-Auth is validated against `users` + `roles` + `user_roles` + `group_assignments`.
+Auth is stored in Better Auth tables: `users`, `session`, `account`, and
+`verification`. App-specific group scope remains in `group_assignments`.
 
 A required admin account invariant is enforced:
 - email: `admin@kuuna.ai`
 - password bootstrap env: `DASHBOARD_REQUIRED_ADMIN_PASSWORD` (default `admin123456!`)
 
-On login/admin-user-page access, the app ensures this account + admin role assignment exist.
+On login/admin-user-page access, the app ensures this account exists with the
+`admin` role.
 
 
 Run through Docker Compose from repo root:

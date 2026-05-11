@@ -2,9 +2,9 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { hashPassword } from "../../auth.js";
+import { ensureRequiredAdmin } from "../../auth/bootstrap.js";
 import { getSettings } from "../../config.js";
-import { roles, runtimeRuns, templateBuilds, userRoles, users } from "../../db/schema.js";
+import { runtimeRuns, templateBuilds, users } from "../../db/schema.js";
 import { reconcileMediaAssets } from "../../jobs/media-processing.js";
 import { createTRPCRouter, protectedProcedure, publicProcedure, roleProcedure } from "../init.js";
 
@@ -40,68 +40,21 @@ const internalTokenProcedure = publicProcedure.use(({ ctx, next }) => {
 export const internalRouter = createTRPCRouter({
   adminBootstrap: internalTokenProcedure.mutation(async ({ ctx }) => {
     const settings = getSettings();
-    const now = new Date();
-
-    const roleRows = await Promise.all(
-      (["owner", "admin", "operator", "viewer"] as const).map(async (name) => {
-        const [role] = await ctx.rootDb
-          .insert(roles)
-          .values({ name })
-          .onConflictDoUpdate({ target: roles.name, set: { name } })
-          .returning();
-        return role;
-      }),
-    );
-
-    let [admin] = await ctx.rootDb
+    const [before] = await ctx.rootDb
+      .select()
+      .from(users)
+      .where(eq(users.email, settings.REQUIRED_ADMIN_EMAIL.toLowerCase()))
+      .limit(1);
+    await ensureRequiredAdmin(ctx.rootDb);
+    const [admin] = await ctx.rootDb
       .select()
       .from(users)
       .where(eq(users.email, settings.REQUIRED_ADMIN_EMAIL.toLowerCase()))
       .limit(1);
 
-    let created = false;
-    if (!admin) {
-      [admin] = await ctx.rootDb
-        .insert(users)
-        .values({
-          email: settings.REQUIRED_ADMIN_EMAIL.toLowerCase(),
-          passwordHash: hashPassword(settings.DASHBOARD_REQUIRED_ADMIN_PASSWORD),
-          mustChangePassword: true,
-          isActive: true,
-          failedLoginAttempts: 0,
-        })
-        .returning();
-      created = Boolean(admin);
-    } else {
-      [admin] = await ctx.rootDb
-        .update(users)
-        .set({
-          isActive: true,
-          updatedAt: now,
-          ...(settings.DASHBOARD_DEV_RESET_BOOTSTRAP_ADMIN_PASSWORD &&
-          process.env.NODE_ENV !== "production" &&
-          settings.APP_ENV !== "prod"
-            ? {
-                passwordHash: hashPassword(settings.DASHBOARD_REQUIRED_ADMIN_PASSWORD),
-                mustChangePassword: true,
-              }
-            : {}),
-        })
-        .where(eq(users.id, admin.id))
-        .returning();
-    }
-
-    const adminRole = roleRows.find((role) => role?.name === "admin");
-    if (admin && adminRole) {
-      await ctx.rootDb
-        .insert(userRoles)
-        .values({ userId: admin.id, roleId: adminRole.id })
-        .onConflictDoNothing();
-    }
-
     return {
       ok: Boolean(admin),
-      created,
+      created: !before && Boolean(admin),
       user_id: admin?.id ?? null,
       email: admin?.email ?? settings.REQUIRED_ADMIN_EMAIL.toLowerCase(),
     };

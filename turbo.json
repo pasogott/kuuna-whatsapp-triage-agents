@@ -2,7 +2,8 @@
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": ["pnpm-lock.yaml", "pnpm-workspace.yaml"],
   "globalPassThroughEnv": [
-    "AUTH_TOKEN_SECRET",
+    "BETTER_AUTH_SECRET",
+    "BETTER_AUTH_URL",
     "BACKEND_TS_CONTRACT_DATABASE_URL",
     "DATABASE_URL",
     "GATEWAY_OPS_TOKEN",

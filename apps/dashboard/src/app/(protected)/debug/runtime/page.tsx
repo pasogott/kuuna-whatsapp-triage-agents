@@ -60,7 +60,7 @@ export default async function RuntimeDebugPage() {
       />
       <PageHeader
         title="Runtime debug"
-        description="Quick health and model wiring checks for the runtime agent and OpenAI settings."
+        description="Quick health checks for the runtime agent, Pi model path, and utility OpenAI settings."
       />
 
       <Notice title={healthTitle} tone={healthTone}>
@@ -81,9 +81,9 @@ export default async function RuntimeDebugPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>OpenAI wiring</CardTitle>
+            <CardTitle>OpenAI utility wiring</CardTitle>
             <CardDescription>
-              Configuration in effect for outbound model calls.
+              Embedding and audio transcription configuration.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 pb-6">

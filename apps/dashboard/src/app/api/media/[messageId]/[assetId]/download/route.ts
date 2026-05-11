@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getSession } from "@/lib/auth/session";
+import { currentCookieHeader, getSession } from "@/lib/auth/session";
 import { createBackendTrpcClient } from "@/lib/backend/client";
 
 type Params = Promise<{
@@ -94,7 +94,7 @@ export async function GET(
     new URL(request.url).searchParams.get("disposition") === "inline"
       ? "inline"
       : "attachment";
-  const client = createBackendTrpcClient(session.backendAccessToken);
+  const client = createBackendTrpcClient(undefined, { Cookie: await currentCookieHeader() });
   const assets = await client.messages.media.query({ messageId });
   const asset = assets.find((item) => item.id === assetId);
   if (!asset) {

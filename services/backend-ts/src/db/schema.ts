@@ -89,28 +89,79 @@ const vector1536 = customType<{ data: string; driverData: string }>({
   },
 });
 
-export const users = pgTable("users", {
+export const users = pgTable(
+  "users",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    email: text("email").notNull(),
+    emailVerified: boolean("email_verified").default(false).notNull(),
+    name: text("name").notNull(),
+    image: text("image"),
+    role: roleName("role").default("viewer").notNull(),
+    banned: boolean("banned").default(false).notNull(),
+    banReason: text("ban_reason"),
+    banExpires: timestamp("ban_expires", { withTimezone: true }),
+    mustChangePassword: boolean("must_change_password").default(true).notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => ({
+    userEmailUnique: uniqueIndex("uq_users_email").on(table.email),
+  }),
+);
+
+export const user = users;
+
+export const session = pgTable(
+  "session",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull(),
+    token: text("token").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    impersonatedBy: uuid("impersonated_by"),
+    createdAt,
+    updatedAt,
+  },
+  (table) => ({
+    sessionTokenUnique: uniqueIndex("uq_session_token").on(table.token),
+    sessionUserIdx: index("ix_session_user_id").on(table.userId),
+  }),
+);
+
+export const account = pgTable(
+  "account",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+    scope: text("scope"),
+    password: text("password"),
+    createdAt,
+    updatedAt,
+  },
+  (table) => ({
+    accountProviderUnique: uniqueIndex("uq_account_provider_account")
+      .on(table.providerId, table.accountId),
+    accountUserIdx: index("ix_account_user_id").on(table.userId),
+  }),
+);
+
+export const verification = pgTable("verification", {
   id: uuid("id").defaultRandom().primaryKey(),
-  email: text("email").notNull(),
-  passwordHash: text("password_hash").notNull(),
-  mustChangePassword: boolean("must_change_password").default(true).notNull(),
-  isActive: boolean("is_active").default(true).notNull(),
-  failedLoginAttempts: integer("failed_login_attempts").default(0).notNull(),
-  lockedUntil: timestamp("locked_until", { withTimezone: true }),
-  passwordChangedAt: timestamp("password_changed_at", { withTimezone: true }),
+  identifier: text("identifier").notNull(),
+  value: text("value").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt,
   updatedAt,
-});
-
-export const roles = pgTable("roles", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  name: roleName("name").notNull(),
-});
-
-export const userRoles = pgTable("user_roles", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  userId: uuid("user_id").notNull(),
-  roleId: uuid("role_id").notNull(),
 });
 
 export const groupAssignments = pgTable("group_assignments", {

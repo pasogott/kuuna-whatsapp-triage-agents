@@ -2,7 +2,10 @@ import cors from "@fastify/cors";
 import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
 import fastify, { type FastifyError } from "fastify";
 import { ZodError } from "zod";
+import { fromNodeHeaders } from "better-auth/node";
 
+import { ensureRequiredAdmin } from "./auth/bootstrap.js";
+import { auth } from "./better-auth.js";
 import { getSettings } from "./config.js";
 import { closeDb, db, type Database } from "./db/client.js";
 import { closeQueues, enqueueKuunaJob, type EnqueueKuunaJob } from "./jobs/queues.js";
@@ -33,14 +36,23 @@ export type BuildServerOptions = {
 
 export async function buildServer(options: BuildServerOptions = {}) {
   initSentry();
+  const settings = getSettings();
 
   const app = fastify({
     logger: false,
   });
 
   await app.register(cors, {
-    origin: true,
+    origin(origin, callback) {
+      if (!origin || origin === settings.DASHBOARD_ORIGIN || origin === settings.BETTER_AUTH_URL) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error("origin not allowed"), false);
+    },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Internal-Token", "X-Requested-With"],
   });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -58,8 +70,42 @@ export async function buildServer(options: BuildServerOptions = {}) {
   });
 
   app.get("/health", async () => ({ status: "ok", service: "backend-ts" }));
+  app.route({
+    method: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    url: "/api/auth/*",
+    async handler(request, reply) {
+      const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
+      if (request.method === "POST" && url.pathname === "/api/auth/sign-in/email") {
+        await ensureRequiredAdmin(options.db ?? db);
+      }
+      const body =
+        request.method === "GET" || request.method === "HEAD" || request.body === undefined
+          ? undefined
+          : JSON.stringify(request.body);
+      const response = await auth.handler(
+        new Request(url.toString(), {
+          method: request.method,
+          headers: fromNodeHeaders(request.headers),
+          body,
+        }),
+      );
+
+      reply.status(response.status);
+      response.headers.forEach((value, key) => {
+        if (key.toLowerCase() !== "set-cookie") {
+          reply.header(key, value);
+        }
+      });
+      const withSetCookie = response.headers as Headers & { getSetCookie?: () => string[] };
+      const setCookies = withSetCookie.getSetCookie?.() ?? [response.headers.get("set-cookie")].filter(Boolean);
+      for (const cookie of setCookies) {
+        reply.header("Set-Cookie", cookie);
+      }
+      return reply.send(response.body ? await response.text() : null);
+    },
+  });
+
   app.post("/internal/runtime-tools/search", async (request, reply) => {
-    const settings = getSettings();
     const expected = settings.RUNTIME_TOOL_TOKEN?.trim() || settings.INTERNAL_OPS_TOKEN?.trim();
     if (!expected) {
       return reply.code(503).send({ detail: "runtime tool token not configured" });

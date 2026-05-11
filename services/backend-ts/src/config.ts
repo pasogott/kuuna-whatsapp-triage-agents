@@ -9,6 +9,8 @@ const absoluteContainerPath = z.preprocess(
   z.string().trim().min(1).refine((value) => value.startsWith("/"), "must be an absolute container path").default("/runtime-data/pi-auth.json"),
 );
 
+const DEV_BETTER_AUTH_SECRET = "dev-insecure-better-auth-secret-local";
+
 const envSchema = z.object({
   APP_ENV: z.string().default("dev"),
   HOST: z.string().default("::"),
@@ -23,7 +25,9 @@ const envSchema = z.object({
   REQUIRED_ADMIN_EMAIL: z.string().email().default("admin@kuuna.ai"),
   DASHBOARD_REQUIRED_ADMIN_PASSWORD: z.string().default("admin123456!"),
   DASHBOARD_DEV_RESET_BOOTSTRAP_ADMIN_PASSWORD: z.coerce.boolean().default(false),
-  AUTH_TOKEN_SECRET: z.string().default("dev-insecure-change-me"),
+  BETTER_AUTH_SECRET: z.string().default(DEV_BETTER_AUTH_SECRET),
+  BETTER_AUTH_URL: z.string().url().default("http://localhost:8000"),
+  DASHBOARD_ORIGIN: z.string().url().default("http://localhost:3000"),
   AUTH_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
   AUTH_LOCKOUT_THRESHOLD: z.coerce.number().int().positive().default(5),
   AUTH_LOCKOUT_SECONDS: z.coerce.number().int().positive().default(900),
@@ -76,10 +80,26 @@ let cachedSettings: Settings | undefined;
 export function getSettings(): Settings {
   if (!cachedSettings) {
     cachedSettings = envSchema.parse(process.env);
+    assertProductionAuthSettings(cachedSettings);
   }
   return cachedSettings;
 }
 
 export function resetSettingsForTests(): void {
   cachedSettings = undefined;
+}
+
+function assertProductionAuthSettings(settings: Settings): void {
+  const isProduction = process.env.NODE_ENV === "production" || settings.APP_ENV === "prod";
+  if (!isProduction) return;
+
+  if (
+    !process.env.BETTER_AUTH_SECRET ||
+    settings.BETTER_AUTH_SECRET === DEV_BETTER_AUTH_SECRET ||
+    settings.BETTER_AUTH_SECRET.length < 32
+  ) {
+    throw new Error(
+      "BETTER_AUTH_SECRET must be set to a non-default value with at least 32 characters in production",
+    );
+  }
 }

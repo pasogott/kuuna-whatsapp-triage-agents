@@ -1,39 +1,42 @@
 import assert from "node:assert/strict";
-import { scryptSync } from "node:crypto";
 import test from "node:test";
 
-import {
-  decodeAccessToken,
-  hashPassword,
-  issueAccessToken,
-  passwordPolicyViolations,
-  verifyPassword,
-} from "../src/auth.js";
+import { passwordPolicyViolations } from "../src/auth.js";
+import { getSettings, resetSettingsForTests } from "../src/config.js";
 
-test("scrypt password hashes remain verifiable", () => {
-  const hash = hashPassword("SecurePass123!");
-  assert.equal(verifyPassword("SecurePass123!", hash), true);
-  assert.equal(verifyPassword("wrong", hash), false);
-});
+test("production settings reject default better auth secret", (t) => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousAppEnv = process.env.APP_ENV;
+  const previousSecret = process.env.BETTER_AUTH_SECRET;
 
-test("legacy dashboard scrypt password hashes remain verifiable", () => {
-  const saltHex = "0a0db7a3a02c80447f0fe37d4337527";
-  const digestHex = scryptSync("admin123456!", saltHex, 64).toString("hex");
-  const legacyHash = `scrypt:${saltHex}:${digestHex}`;
-  assert.equal(verifyPassword("admin123456!", legacyHash), true);
-  assert.equal(verifyPassword("wrong", legacyHash), false);
-});
-
-test("access token roundtrip uses compatible payload fields", () => {
-  const token = issueAccessToken({
-    userId: "00000000-0000-0000-0000-000000000001",
-    role: "admin",
-    groupScope: ["group-b", "group-a", "group-a"],
+  t.after(() => {
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+    if (previousAppEnv === undefined) {
+      delete process.env.APP_ENV;
+    } else {
+      process.env.APP_ENV = previousAppEnv;
+    }
+    if (previousSecret === undefined) {
+      delete process.env.BETTER_AUTH_SECRET;
+    } else {
+      process.env.BETTER_AUTH_SECRET = previousSecret;
+    }
+    resetSettingsForTests();
   });
-  const payload = decodeAccessToken(token);
-  assert.equal(payload.sub, "00000000-0000-0000-0000-000000000001");
-  assert.equal(payload.role, "admin");
-  assert.deepEqual(payload.group_scope, ["group-a", "group-b"]);
+
+  process.env.NODE_ENV = "production";
+  delete process.env.APP_ENV;
+  delete process.env.BETTER_AUTH_SECRET;
+  resetSettingsForTests();
+  assert.throws(() => getSettings(), /BETTER_AUTH_SECRET/);
+
+  process.env.BETTER_AUTH_SECRET = "a".repeat(32);
+  resetSettingsForTests();
+  assert.equal(getSettings().BETTER_AUTH_SECRET, "a".repeat(32));
 });
 
 test("password policy reports domain violations", () => {

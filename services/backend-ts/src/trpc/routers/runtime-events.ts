@@ -28,6 +28,9 @@ export const runtimeEventsRouter = createTRPCRouter({
 
       const subscriptionSignal: AbortSignal = signal ?? new AbortController().signal;
       for await (const event of subscribeRuntimeEvents(subscriptionSignal)) {
+        if (ctx.auth && ctx.auth.sessionExpiresAt.getTime() <= Date.now()) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "token expired" });
+        }
         if (providerGroupId && event.provider_group_id !== providerGroupId) continue;
         if (!providerGroupId && !isPrivileged && (!event.provider_group_id || !allowedGroups.has(event.provider_group_id))) continue;
         if (types && !types.has(event.type)) continue;
