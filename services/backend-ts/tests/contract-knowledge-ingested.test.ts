@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { knowledgeCustomerDocs, mediaAssets, messages, messageVersions, transcripts } from "../src/db/schema.js";
+import {
+  groupMembers,
+  knowledgeCustomerDocs,
+  knowledgeGroupDocs,
+  knowledgeVersions,
+  mediaAssets,
+  messages,
+  messageVersions,
+  transcripts,
+} from "../src/db/schema.js";
 import { contractDatabaseUrl, createContractHarness } from "./contract-harness.js";
 
 const skipReason = contractDatabaseUrl
@@ -51,6 +60,92 @@ test("contract: ingested group docs aggregate latest message versions", { skip: 
   assert.equal(payload[0]?.scope, "group");
   assert.equal(payload[0]?.status, "ready");
   assert.equal(payload[0]?.chunk_count, 1);
+});
+
+test("contract: person note creates and updates one group knowledge document", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  t.after(() => harness.close());
+  const caller = await authedCaller(harness);
+
+  await harness.db.insert(groupMembers).values({
+    providerGroupId: "people-group@g.us",
+    providerUserId: "person-1@s.whatsapp.net",
+    role: "client",
+    displayName: "Alex Client",
+    derivedPhone: "436600000001",
+  });
+
+  const first = await caller.knowledge.upsertPersonNote({
+    providerGroupId: "people-group@g.us",
+    providerUserId: "person-1@s.whatsapp.net",
+    contentMarkdown: "First note about Alex.",
+  });
+  const second = await caller.knowledge.upsertPersonNote({
+    providerGroupId: "people-group@g.us",
+    providerUserId: "person-1@s.whatsapp.net",
+    contentMarkdown: "Updated note about Alex.",
+  });
+
+  assert.equal(first.doc_id, second.doc_id);
+  assert.equal(second.version_no, 2);
+  const docs = await harness.db.select().from(knowledgeGroupDocs);
+  assert.equal(docs.length, 1);
+  assert.equal(docs[0]?.providerGroupId, "people-group@g.us");
+  assert.match(docs[0]?.docKey ?? "", /^person-note-/);
+  assert.equal(docs[0]?.title, "Person note: Alex Client");
+
+  const versions = await harness.db.select().from(knowledgeVersions);
+  assert.deepEqual(
+    versions.map((version) => version.status).sort(),
+    ["archived", "published"],
+  );
+  assert.equal(harness.jobs.filter((job) => job.name === "knowledge_indexing").length, 2);
+});
+
+test("contract: person note rejects members outside the chat", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  t.after(() => harness.close());
+  const caller = await authedCaller(harness);
+
+  await harness.db.insert(groupMembers).values({
+    providerGroupId: "other-group@g.us",
+    providerUserId: "person-1@s.whatsapp.net",
+    role: "client",
+    displayName: "Other Person",
+  });
+
+  await assert.rejects(
+    () =>
+      caller.knowledge.upsertPersonNote({
+        providerGroupId: "people-group@g.us",
+        providerUserId: "person-1@s.whatsapp.net",
+        contentMarkdown: "Should not save.",
+      }),
+    /group member not found/,
+  );
+});
+
+test("contract: person note rejects empty markdown", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  t.after(() => harness.close());
+  const caller = await authedCaller(harness);
+
+  await harness.db.insert(groupMembers).values({
+    providerGroupId: "people-group@g.us",
+    providerUserId: "person-1@s.whatsapp.net",
+    role: "client",
+    displayName: "Alex Client",
+  });
+
+  await assert.rejects(
+    () =>
+      caller.knowledge.upsertPersonNote({
+        providerGroupId: "people-group@g.us",
+        providerUserId: "person-1@s.whatsapp.net",
+        contentMarkdown: "   ",
+      }),
+    /Markdown cannot be empty/,
+  );
 });
 
 test("contract: ingested docs status follows pending media and transcript chunks", { skip: skipReason }, async (t) => {

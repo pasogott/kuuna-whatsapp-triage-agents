@@ -34,6 +34,11 @@ function rethrowRedirectError(error: unknown): void {
   }
 }
 
+function chatKnowledgeRedirect(providerGroupId: string, params: Record<string, string>): string {
+  const search = new URLSearchParams(params);
+  return `/inbox/${encodeURIComponent(providerGroupId)}/knowledge?${search.toString()}`;
+}
+
 const cyberheldCommonKnowledgeSeeds = [
   {
     title: "Cyberheld - Unternehmensprofil und Grundpositionierung",
@@ -189,5 +194,38 @@ export async function publishCommonKnowledgeVersionAction(formData: FormData): P
     rethrowRedirectError(error);
     const reason = error instanceof Error ? error.message : String(error);
     redirect(`/knowledge/common/${encodeURIComponent(docRefId)}?error=${encodeURIComponent(shortReason(reason))}`);
+  }
+}
+
+export async function savePersonKnowledgeNoteAction(formData: FormData): Promise<void> {
+  await requireAuthorized("knowledge", "publish");
+
+  const providerGroupId = clean(formData.get("providerGroupId"));
+  const providerUserId = clean(formData.get("providerUserId"));
+  const contentMarkdownValue = formData.get("contentMarkdown");
+  const contentMarkdown = typeof contentMarkdownValue === "string" ? contentMarkdownValue : null;
+
+  if (!providerGroupId) {
+    redirect("/inbox?personNote=error&reason=missing-provider-group-id");
+  }
+  if (!providerUserId) {
+    redirect(chatKnowledgeRedirect(providerGroupId, { personNote: "error", reason: "missing-person" }));
+  }
+  if (!contentMarkdown || !contentMarkdown.trim()) {
+    redirect(chatKnowledgeRedirect(providerGroupId, { personNote: "error", reason: "missing-content" }));
+  }
+
+  try {
+    const client = await createSessionBackendTrpcClient();
+    await client.knowledge.upsertPersonNote.mutate({
+      providerGroupId,
+      providerUserId,
+      contentMarkdown,
+    });
+    redirect(chatKnowledgeRedirect(providerGroupId, { personNote: "saved" }));
+  } catch (error) {
+    rethrowRedirectError(error);
+    const reason = error instanceof Error ? error.message : String(error);
+    redirect(chatKnowledgeRedirect(providerGroupId, { personNote: "error", reason: shortReason(reason) }));
   }
 }

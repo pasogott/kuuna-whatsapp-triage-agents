@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -6,6 +8,7 @@ import {
   clientProfiles,
   groupBindings,
   groupClientProfiles,
+  groupMembers,
   knowledgeCommonDocs,
   knowledgeCustomerDocs,
   knowledgeClaims,
@@ -39,6 +42,14 @@ const customerDocInput = groupDocInput.extend({
 
 const personalDocInput = commonDocInput.extend({
   clientProfileId: z.string().uuid(),
+});
+
+const personNoteInput = z.object({
+  providerGroupId: z.string().trim().min(1).max(255),
+  providerUserId: z.string().trim().min(1).max(255),
+  contentMarkdown: z.string().min(1).refine((value) => value.trim().length > 0, {
+    message: "Markdown cannot be empty",
+  }),
 });
 
 const versionInput = z.object({
@@ -340,6 +351,97 @@ export const knowledgeRouter = createTRPCRouter({
       .values({ providerGroupId: input.providerGroupId, docKey: input.docKey, title: input.title })
       .returning();
     return doc;
+  }),
+
+  upsertPersonNote: roleProcedure("owner", "admin").input(personNoteInput).mutation(async ({ ctx, input }) => {
+    const [member] = await ctx.db
+      .select()
+      .from(groupMembers)
+      .where(
+        and(
+          eq(groupMembers.providerGroupId, input.providerGroupId),
+          eq(groupMembers.providerUserId, input.providerUserId),
+        ),
+      )
+      .limit(1);
+    if (!member) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "group member not found" });
+    }
+
+    const docKey = personNoteDocKey(input.providerUserId);
+    const title = `Person note: ${personNoteDisplayName(member)}`;
+    const now = new Date();
+    const result = await ctx.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(knowledgeGroupDocs)
+        .where(
+          and(
+            eq(knowledgeGroupDocs.providerGroupId, input.providerGroupId),
+            eq(knowledgeGroupDocs.docKey, docKey),
+          ),
+        )
+        .limit(1);
+
+      const doc = existing
+        ? (await tx
+            .update(knowledgeGroupDocs)
+            .set({ title, updatedAt: now })
+            .where(eq(knowledgeGroupDocs.id, existing.id))
+            .returning())[0]
+        : (await tx
+            .insert(knowledgeGroupDocs)
+            .values({
+              providerGroupId: input.providerGroupId,
+              docKey,
+              title,
+            })
+            .returning())[0];
+      if (!doc) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "person note document write failed" });
+      }
+
+      const [latest] = await tx
+        .select({ value: sql<number>`coalesce(max(${knowledgeVersions.versionNo}), 0)` })
+        .from(knowledgeVersions)
+        .where(and(eq(knowledgeVersions.scope, "group"), eq(knowledgeVersions.docRefId, doc.id)));
+      await tx
+        .update(knowledgeVersions)
+        .set({ status: "archived", updatedAt: now })
+        .where(
+          and(
+            eq(knowledgeVersions.scope, "group"),
+            eq(knowledgeVersions.docRefId, doc.id),
+            eq(knowledgeVersions.status, "published"),
+          ),
+        );
+      const [version] = await tx
+        .insert(knowledgeVersions)
+        .values({
+          scope: "group",
+          docRefId: doc.id,
+          versionNo: Number(latest?.value ?? 0) + 1,
+          status: "published",
+          contentMarkdown: input.contentMarkdown,
+        })
+        .returning();
+      if (!version) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "person note version write failed" });
+      }
+      return { doc, version };
+    });
+
+    await enqueueKuunaJob(
+      "knowledge_indexing",
+      { knowledge_version_id: result.version.id },
+      `knowledge_indexing_${jobToken(result.version.id)}`,
+    );
+    return {
+      doc_id: result.doc.id,
+      doc_key: result.doc.docKey,
+      version_id: result.version.id,
+      version_no: result.version.versionNo,
+    };
   }),
 
   customerDocs: protectedProcedure
@@ -849,6 +951,21 @@ function knowledgeDocKeyAllowed(allowed: KnowledgeFilter["commonDocKeys"], docKe
   if (allowed === "*") return true;
   if (allowed === "none") return false;
   return Boolean(docKey && allowed.includes(docKey.trim().toLowerCase()));
+}
+
+function personNoteDocKey(providerUserId: string): string {
+  const digest = createHash("sha256").update(providerUserId).digest("hex").slice(0, 16);
+  return `person-note-${digest}`;
+}
+
+function personNoteDisplayName(member: typeof groupMembers.$inferSelect): string {
+  return (
+    member.displayName?.trim() ||
+    member.pushName?.trim() ||
+    member.phoneOverride?.trim() ||
+    member.derivedPhone?.trim() ||
+    member.providerUserId
+  );
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {

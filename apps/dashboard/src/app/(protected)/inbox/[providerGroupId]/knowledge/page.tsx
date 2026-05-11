@@ -5,6 +5,8 @@ type SearchParams = Promise<{
   q?: string;
   scope?: string;
   sourceRole?: string;
+  personNote?: string;
+  reason?: string;
 }>;
 
 export default async function InboxKnowledgeTabPage({
@@ -25,6 +27,8 @@ export default async function InboxKnowledgeTabPage({
         scope: normalizeScope(rawFilters.scope),
         sourceRole: normalizeSourceRole(rawFilters.sourceRole),
       }}
+      personNoteStatus={normalizePersonNoteStatus(rawFilters.personNote)}
+      personNoteReason={rawFilters.reason}
     />
   );
 }
@@ -43,4 +47,8 @@ function normalizeSourceRole(value: string | undefined) {
     value === "unknown"
     ? value
     : undefined;
+}
+
+function normalizePersonNoteStatus(value: string | undefined) {
+  return value === "saved" || value === "error" ? value : undefined;
 }

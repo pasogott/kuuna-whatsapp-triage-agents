@@ -4,8 +4,9 @@ import { StatusBadge } from "@/components/status/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Notice } from "@/components/ui/notice";
-import { listGroupKnowledgeExplorer } from "@/lib/api-client";
-import type { KnowledgeExplorerItem } from "@/lib/api-client/types";
+import { savePersonKnowledgeNoteAction } from "@/lib/knowledge/actions";
+import { listGroupKnowledgeExplorer, listGroupMembers } from "@/lib/api-client";
+import type { KnowledgeExplorerItem, WhatsAppGroupMember } from "@/lib/api-client/types";
 import { formatDateTime } from "@/lib/utils/format";
 
 type KnowledgeTabProps = {
@@ -15,6 +16,8 @@ type KnowledgeTabProps = {
     scope?: "common" | "group" | "personal";
     sourceRole?: "client" | "lawyer" | "company_staff" | "bot" | "unknown";
   };
+  personNoteStatus?: "saved" | "error";
+  personNoteReason?: string;
 };
 
 const scopeLabels: Record<KnowledgeExplorerItem["scope"], string> = {
@@ -29,8 +32,16 @@ const kindLabels: Record<KnowledgeExplorerItem["kind"], string> = {
   claim: "Claim",
 };
 
-export async function KnowledgeTab({ providerGroupId, filters = {} }: KnowledgeTabProps) {
-  const explorer = await listGroupKnowledgeExplorer(providerGroupId, filters);
+export async function KnowledgeTab({
+  providerGroupId,
+  filters = {},
+  personNoteStatus,
+  personNoteReason,
+}: KnowledgeTabProps) {
+  const [explorer, memberConfig] = await Promise.all([
+    listGroupKnowledgeExplorer(providerGroupId, filters),
+    listGroupMembers(providerGroupId),
+  ]);
   const grouped = {
     common: explorer.items.filter((item) => item.scope === "common"),
     group: explorer.items.filter((item) => item.scope === "group"),
@@ -44,6 +55,19 @@ export async function KnowledgeTab({ providerGroupId, filters = {} }: KnowledgeT
         search from its active template. Chat-derived entries remain attributed
         perspectives, not objective facts.
       </Notice>
+
+      {personNoteStatus === "saved" ? (
+        <Notice title="Person note saved" tone="success">
+          The Markdown note was published and queued for Knowledge indexing.
+        </Notice>
+      ) : null}
+      {personNoteStatus === "error" ? (
+        <Notice title="Person note failed" tone="warning">
+          {personNoteReason ?? "The person note could not be saved."}
+        </Notice>
+      ) : null}
+
+      <PersonNoteForm providerGroupId={providerGroupId} members={memberConfig.items} />
 
       <form className="grid gap-3 rounded border border-border bg-card p-4 md:grid-cols-[1fr_180px_220px_auto]">
         <input
@@ -98,6 +122,66 @@ export async function KnowledgeTab({ providerGroupId, filters = {} }: KnowledgeT
         ))}
       </div>
     </div>
+  );
+}
+
+function PersonNoteForm({
+  providerGroupId,
+  members,
+}: {
+  providerGroupId: string;
+  members: WhatsAppGroupMember[];
+}) {
+  const selectableMembers = members.filter((member) => member.role !== "bot");
+  return (
+    <form action={savePersonKnowledgeNoteAction} className="grid gap-3 rounded border border-border bg-card p-4">
+      <input type="hidden" name="providerGroupId" value={providerGroupId} />
+      <div className="grid gap-3 md:grid-cols-[minmax(220px,320px)_1fr_auto] md:items-start">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium uppercase text-muted-foreground">Person</span>
+          <select
+            name="providerUserId"
+            className="h-10 rounded border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            required
+            disabled={selectableMembers.length === 0}
+          >
+            <option value="">Select person</option>
+            {selectableMembers.map((member) => (
+              <option key={member.providerUserId} value={member.providerUserId}>
+                {memberLabel(member)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium uppercase text-muted-foreground">Markdown note</span>
+          <textarea
+            name="contentMarkdown"
+            className="min-h-28 rounded border border-input bg-background px-3 py-2 text-sm leading-6 outline-none focus:ring-2 focus:ring-ring"
+            placeholder="Add relevant person information for this chat."
+            required
+            disabled={selectableMembers.length === 0}
+          />
+        </label>
+        <Button type="submit" className="md:mt-5" disabled={selectableMembers.length === 0}>
+          Save note
+        </Button>
+      </div>
+      {selectableMembers.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Sync or save WhatsApp members in Settings before adding person notes.
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
+function memberLabel(member: WhatsAppGroupMember): string {
+  return (
+    member.displayName ||
+    member.pushName ||
+    member.phoneDisplay ||
+    member.providerUserId
   );
 }
 

@@ -927,14 +927,25 @@ export async function listKnowledgeDocs(
         return (await client.knowledge.commonDocs.query()).map(mapKnowledgeDoc);
       }
       if (scope === "group") {
-        return (await client.knowledge.ingestedGroupDocs.query({ providerGroupId })).map(mapKnowledgeDoc);
+        const [manualDocs, ingestedDocs] = await Promise.all([
+          providerGroupId
+            ? client.knowledge.groupDocs.query({ providerGroupId })
+            : Promise.resolve([]),
+          client.knowledge.ingestedGroupDocs.query({ providerGroupId }),
+        ]);
+        return [...manualDocs, ...ingestedDocs].map(mapKnowledgeDoc);
       }
       if (scope === "customer" && providerGroupId) {
         return (await client.knowledge.customerDocs.query({ providerGroupId })).map(mapKnowledgeDoc);
       }
       const [commonDocs, groupDocs, customerDocs] = await Promise.all([
         client.knowledge.commonDocs.query(),
-        client.knowledge.ingestedGroupDocs.query({ providerGroupId }),
+        providerGroupId
+          ? Promise.all([
+              client.knowledge.groupDocs.query({ providerGroupId }),
+              client.knowledge.ingestedGroupDocs.query({ providerGroupId }),
+            ]).then(([manualDocs, ingestedDocs]) => [...manualDocs, ...ingestedDocs])
+          : client.knowledge.ingestedGroupDocs.query({ providerGroupId }),
         providerGroupId
           ? client.knowledge.customerDocs.query({ providerGroupId })
           : Promise.resolve([]),
