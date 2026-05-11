@@ -18,8 +18,7 @@ test("contract: template build tRPC queues published version", { skip: skipReaso
   t.after(() => harness.close());
 
   const actor = await harness.seedUser({ email: "builder@example.com", password: "LongPassword123!", role: "admin" });
-  const login = await (await harness.caller()).auth.login({ email: "builder@example.com", password: "LongPassword123!" });
-  const caller = await harness.caller(login.access_token);
+  const caller = await harness.callerForUser(actor.id);
   const seeded = await seedTemplate(harness, { status: "published" });
 
   const body = await caller.templates.queueBuild({
@@ -62,8 +61,7 @@ test("contract: template build tRPC uses runtime image settings from template ve
   t.after(() => harness.close());
 
   const actor = await harness.seedUser({ email: "builder-runtime@example.com", password: "LongPassword123!", role: "admin" });
-  const login = await (await harness.caller()).auth.login({ email: "builder-runtime@example.com", password: "LongPassword123!" });
-  const caller = await harness.caller(login.access_token);
+  const caller = await harness.callerForUser(actor.id);
   const seeded = await seedTemplate(harness, {
     status: "published",
     toolsConfig: {
@@ -93,8 +91,7 @@ test("contract: template build tRPC rejects unpublished or missing versions", { 
   t.after(() => harness.close());
 
   const actor = await harness.seedUser({ email: "builder2@example.com", password: "LongPassword123!", role: "admin" });
-  const login = await (await harness.caller()).auth.login({ email: "builder2@example.com", password: "LongPassword123!" });
-  const caller = await harness.caller(login.access_token);
+  const caller = await harness.callerForUser(actor.id);
   const seeded = await seedTemplate(harness, { status: "draft" });
 
   await assert.rejects(
@@ -123,8 +120,7 @@ test("contract: template build tRPC rejects bash without allowlist and blocked D
   t.after(() => harness.close());
 
   const actor = await harness.seedUser({ email: "builder4@example.com", password: "LongPassword123!", role: "admin" });
-  const login = await (await harness.caller()).auth.login({ email: "builder4@example.com", password: "LongPassword123!" });
-  const caller = await harness.caller(login.access_token);
+  const caller = await harness.callerForUser(actor.id);
   const seeded = await seedTemplate(harness, { status: "published" });
 
   await assert.rejects(
@@ -155,9 +151,8 @@ test("contract: template build tRPC list mirrors response shape", { skip: skipRe
   const harness = await createContractHarness();
   t.after(() => harness.close());
 
-  await harness.seedUser({ email: "builder3@example.com", password: "LongPassword123!", role: "admin" });
-  const login = await (await harness.caller()).auth.login({ email: "builder3@example.com", password: "LongPassword123!" });
-  const caller = await harness.caller(login.access_token);
+  const actor = await harness.seedUser({ email: "builder3@example.com", password: "LongPassword123!", role: "admin" });
+  const caller = await harness.callerForUser(actor.id);
 
   const seeded = await seedTemplate(harness, { status: "published" });
   const [build] = await harness.db

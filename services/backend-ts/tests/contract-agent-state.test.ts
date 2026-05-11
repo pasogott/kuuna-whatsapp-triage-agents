@@ -11,20 +11,11 @@ const skipReason = contractDatabaseUrl
   ? false
   : "set BACKEND_TS_CONTRACT_DATABASE_URL to run backend-ts contract tests";
 
-async function login(
-  harness: Awaited<ReturnType<typeof createContractHarness>>,
-  email: string,
-  password: string,
-) {
-  const caller = await harness.caller();
-  return caller.auth.login({ email, password });
-}
-
 test("contract: agent state todos include source message attachments", { skip: skipReason }, async (t) => {
   const harness = await createContractHarness();
   t.after(() => harness.close());
 
-  await harness.seedUser({
+  const owner = await harness.seedUser({
     email: "owner@example.com",
     password: "OwnerSecure123!",
     role: "owner",
@@ -64,8 +55,7 @@ test("contract: agent state todos include source message attachments", { skip: s
     priority: "urgent",
   });
 
-  const loginResult = await login(harness, "owner@example.com", "OwnerSecure123!");
-  const authedCaller = await harness.caller(loginResult.access_token);
+  const authedCaller = await harness.callerForUser(owner.id);
   const result = await authedCaller.agentState.todos({ providerGroupId: "group-a@g.us" });
 
   assert.equal(result.length, 1);
@@ -80,7 +70,7 @@ test("contract: todo status updates completed state and audit event", { skip: sk
   const harness = await createContractHarness();
   t.after(() => harness.close());
 
-  await harness.seedUser({
+  const operator = await harness.seedUser({
     email: "operator@example.com",
     password: "Operator123!!",
     role: "operator",
@@ -96,8 +86,7 @@ test("contract: todo status updates completed state and audit event", { skip: sk
     priority: "normal",
   });
 
-  const loginResult = await login(harness, "operator@example.com", "Operator123!!");
-  const authedCaller = await harness.caller(loginResult.access_token);
+  const authedCaller = await harness.callerForUser(operator.id);
 
   const done = await authedCaller.agentState.updateTodoStatus({ todoId, status: "done" });
   assert.equal(done.status, "done");
@@ -123,13 +112,13 @@ test("contract: todo status update enforces role and group scope", { skip: skipR
   const harness = await createContractHarness();
   t.after(() => harness.close());
 
-  await harness.seedUser({
+  const viewer = await harness.seedUser({
     email: "viewer@example.com",
     password: "Viewer123!!",
     role: "viewer",
     groupScope: ["group-a@g.us"],
   });
-  await harness.seedUser({
+  const operator = await harness.seedUser({
     email: "operator@example.com",
     password: "Operator123!!",
     role: "operator",
@@ -145,15 +134,13 @@ test("contract: todo status update enforces role and group scope", { skip: skipR
     priority: "normal",
   });
 
-  const viewerLogin = await login(harness, "viewer@example.com", "Viewer123!!");
-  const viewerCaller = await harness.caller(viewerLogin.access_token);
+  const viewerCaller = await harness.callerForUser(viewer.id);
   await assert.rejects(
     viewerCaller.agentState.updateTodoStatus({ todoId, status: "done" }),
     /insufficient role/,
   );
 
-  const operatorLogin = await login(harness, "operator@example.com", "Operator123!!");
-  const operatorCaller = await harness.caller(operatorLogin.access_token);
+  const operatorCaller = await harness.callerForUser(operator.id);
   await assert.rejects(
     operatorCaller.agentState.updateTodoStatus({ todoId, status: "done" }),
     /outside group scope/,

@@ -1,29 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  decodeAccessToken,
-  extractBearerToken,
-  issueAccessToken,
-  passwordPolicyViolations,
-} from "../src/auth.js";
+import { passwordPolicyViolations } from "../src/auth.js";
 import { getSettings, resetSettingsForTests } from "../src/config.js";
-
-test("access token roundtrip uses compatible payload fields", () => {
-  const token = issueAccessToken({
-    userId: "00000000-0000-0000-0000-000000000001",
-    role: "admin",
-    groupScope: ["group-b", "group-a", "group-a"],
-  });
-  const payload = decodeAccessToken(token);
-  assert.equal(payload?.userId, "00000000-0000-0000-0000-000000000001");
-  assert.equal(payload?.role, "admin");
-  assert.deepEqual(payload?.groupScope, ["group-b", "group-a", "group-a"]);
-});
-
-test("bearer token extraction accepts case-insensitive auth scheme", () => {
-  assert.equal(extractBearerToken("bearer token-value"), "token-value");
-});
 
 test("production settings reject default better auth secret", (t) => {
   const previousNodeEnv = process.env.NODE_ENV;

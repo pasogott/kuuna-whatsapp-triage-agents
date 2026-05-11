@@ -16,22 +16,12 @@ const skipReason = contractDatabaseUrl
   ? false
   : "set BACKEND_TS_CONTRACT_DATABASE_URL to run backend-ts contract tests";
 
-async function login(
-  harness: Awaited<ReturnType<typeof createContractHarness>>,
-  input: { email: string; password: string },
-): Promise<string> {
-  const publicCaller = await harness.caller();
-  const result = await publicCaller.auth.login(input);
-  return result.access_token;
-}
-
 test("contract: publishVersion returns mapped JSON response shape", { skip: skipReason }, async (t) => {
   const harness = await createContractHarness();
   t.after(() => harness.close());
 
-  await harness.seedUser({ email: "owner@example.com", password: "OwnerSecure123!", role: "owner" });
-  const token = await login(harness, { email: "owner@example.com", password: "OwnerSecure123!" });
-  const caller = await harness.caller(token);
+  const owner = await harness.seedUser({ email: "owner@example.com", password: "OwnerSecure123!", role: "owner" });
+  const caller = await harness.callerForUser(owner.id);
 
   const [template] = await harness.db
     .insert(groupTemplates)
@@ -67,13 +57,13 @@ test("contract: internal runtimeRuns requires owner or admin role", { skip: skip
   const harness = await createContractHarness();
   t.after(() => harness.close());
 
-  await harness.seedUser({
+  const operator = await harness.seedUser({
     email: "operator@example.com",
     password: "OperatorSecure123!",
     role: "operator",
     groupScope: ["group-a@g.us"],
   });
-  await harness.seedUser({ email: "admin@example.com", password: "AdminSecure123!", role: "admin" });
+  const admin = await harness.seedUser({ email: "admin@example.com", password: "AdminSecure123!", role: "admin" });
 
   await harness.db.insert(runtimeRuns).values({
     providerGroupId: "group-a@g.us",
@@ -86,15 +76,13 @@ test("contract: internal runtimeRuns requires owner or admin role", { skip: skip
     execution: {},
   });
 
-  const operatorToken = await login(harness, { email: "operator@example.com", password: "OperatorSecure123!" });
-  const operatorCaller = await harness.caller(operatorToken);
+  const operatorCaller = await harness.callerForUser(operator.id);
   await assert.rejects(
     () => operatorCaller.internal.runtimeRuns({ limit: 10 }),
     /insufficient role/,
   );
 
-  const adminToken = await login(harness, { email: "admin@example.com", password: "AdminSecure123!" });
-  const adminCaller = await harness.caller(adminToken);
+  const adminCaller = await harness.callerForUser(admin.id);
   const rows = await adminCaller.internal.runtimeRuns({ limit: 10 });
   assert.equal(rows.length, 1);
 });
@@ -103,9 +91,8 @@ test("contract: messages list includes latest preview and media flag", { skip: s
   const harness = await createContractHarness();
   t.after(() => harness.close());
 
-  await harness.seedUser({ email: "operator@example.com", password: "OperatorSecure123!", role: "operator", groupScope: ["group-a@g.us"] });
-  const token = await login(harness, { email: "operator@example.com", password: "OperatorSecure123!" });
-  const caller = await harness.caller(token);
+  const operator = await harness.seedUser({ email: "operator@example.com", password: "OperatorSecure123!", role: "operator", groupScope: ["group-a@g.us"] });
+  const caller = await harness.callerForUser(operator.id);
 
   const [message] = await harness.db
     .insert(messages)

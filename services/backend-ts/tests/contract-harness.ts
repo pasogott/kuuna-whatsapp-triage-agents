@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 
 import { drizzle } from "drizzle-orm/postgres-js";
+import { eq } from "drizzle-orm";
 import postgres, { type Sql } from "postgres";
 import { hashPassword } from "better-auth/crypto";
 
-import type { RoleName } from "../src/auth.js";
+import { issueAccessToken, type RoleName } from "../src/auth.js";
 import { resetSettingsForTests } from "../src/config.js";
 import type { Database } from "../src/db/client.js";
 import { appRouter } from "../src/trpc/routers/_app.js";
@@ -33,6 +34,8 @@ export type ContractHarness = {
   jobs: EnqueuedJob[];
   runtimeChatTasks: string[];
   caller: (token?: string) => Promise<AppCaller>;
+  authTokenForUser: (userId: string) => Promise<string>;
+  callerForUser: (userId: string) => Promise<AppCaller>;
   internalCaller: (internalToken: string) => Promise<AppCaller>;
   seedUser: (input: {
     email: string;
@@ -85,6 +88,40 @@ export async function createContractHarness(): Promise<ContractHarness> {
       if (token) {
         headers.set("authorization", `Bearer ${token}`);
       }
+      const context = await createTRPCContext({ headers, clientIp: "contract-test", db, enqueueJob: async (name, data, jobId) => {
+        jobs.push({ name, data, jobId });
+        return jobId ?? name;
+      }, runtimeChatQueue });
+      return createCaller(context);
+    },
+    authTokenForUser: async (userId: string) => {
+      const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+      assert.ok(user);
+      const assignments = await db
+        .select({ providerGroupId: schema.groupAssignments.providerGroupId })
+        .from(schema.groupAssignments)
+        .where(eq(schema.groupAssignments.userId, userId));
+      return issueAccessToken({
+        userId: user.id,
+        role: user.role,
+        groupScope: assignments.map((assignment) => assignment.providerGroupId),
+      });
+    },
+    callerForUser: async (userId: string) => {
+      const token = await (async () => {
+        const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+        assert.ok(user);
+        const assignments = await db
+          .select({ providerGroupId: schema.groupAssignments.providerGroupId })
+          .from(schema.groupAssignments)
+          .where(eq(schema.groupAssignments.userId, userId));
+        return issueAccessToken({
+          userId: user.id,
+          role: user.role,
+          groupScope: assignments.map((assignment) => assignment.providerGroupId),
+        });
+      })();
+      const headers = new Headers({ authorization: `Bearer ${token}` });
       const context = await createTRPCContext({ headers, clientIp: "contract-test", db, enqueueJob: async (name, data, jobId) => {
         jobs.push({ name, data, jobId });
         return jobId ?? name;

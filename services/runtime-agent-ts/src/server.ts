@@ -35,13 +35,14 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && request.url === "/debug/status") {
+      const piAuthConfigured = Boolean(piAuthPath());
       sendJson(response, 200, {
         status: "ok",
         openai_configured: Boolean(openAiApiKey()),
         openai_base_url: openAiBaseUrl(),
         openai_timeout_seconds: openAiTimeoutSeconds(),
-        auth_configured: Boolean(openAiApiKey() || piAuthPath()),
-        pi_auth_configured: Boolean(piAuthPath()),
+        auth_configured: piAuthConfigured,
+        pi_auth_configured: piAuthConfigured,
         pi_transport: piTransport(),
         default_model: defaultModel(),
         reasoning_effort: defaultReasoningEffort(),

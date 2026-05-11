@@ -2,6 +2,8 @@ import { betterAuth } from "better-auth";
 import { admin } from "better-auth/plugins";
 import { adminAc, defaultAc } from "better-auth/plugins/admin/access";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
+import { hashPassword, verifyPassword } from "better-auth/crypto";
+import { scryptSync, timingSafeEqual } from "node:crypto";
 
 import { getSettings } from "./config.js";
 import { db } from "./db/client.js";
@@ -25,6 +27,10 @@ const configuredAuth = betterAuth({
     disableSignUp: true,
     minPasswordLength: settings.AUTH_PASSWORD_MIN_LENGTH,
     maxPasswordLength: 255,
+    password: {
+      hash: hashPassword,
+      verify: verifyCompatiblePassword,
+    },
   },
   user: {
     additionalFields: {
@@ -76,3 +82,41 @@ export const auth = configuredAuth as {
 };
 
 export type BetterAuthSession = unknown;
+
+async function verifyCompatiblePassword(input: { password: string; hash: string }): Promise<boolean> {
+  if (await verifyPassword(input)) {
+    return true;
+  }
+  return verifyLegacyScryptPassword(input.password, input.hash);
+}
+
+function verifyLegacyScryptPassword(password: string, encodedHash: string): boolean {
+  if (encodedHash.startsWith("scrypt:")) {
+    const [scheme, saltHex, digestHex] = encodedHash.split(":");
+    if (scheme !== "scrypt" || !saltHex || !digestHex) return false;
+    try {
+      const expected = Buffer.from(digestHex, "hex");
+      const derived = scryptSync(password, saltHex, expected.length);
+      return expected.length === derived.length && timingSafeEqual(expected, derived);
+    } catch {
+      return false;
+    }
+  }
+
+  const [algorithm, nRaw, rRaw, pRaw, saltHex, digestHex] = encodedHash.split("$");
+  if (algorithm !== "scrypt" || !nRaw || !rRaw || !pRaw || !saltHex || !digestHex) {
+    return false;
+  }
+
+  try {
+    const expected = Buffer.from(digestHex, "hex");
+    const derived = scryptSync(password, Buffer.from(saltHex, "hex"), expected.length, {
+      N: Number(nRaw),
+      r: Number(rRaw),
+      p: Number(pRaw),
+    });
+    return expected.length === derived.length && timingSafeEqual(expected, derived);
+  } catch {
+    return false;
+  }
+}

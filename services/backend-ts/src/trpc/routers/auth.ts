@@ -2,22 +2,14 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { getSettings } from "../../config.js";
 import {
   getCurrentUser,
-  issueAccessToken,
   passwordPolicyViolations,
   resolveScopeForUser,
-  verifyPassword,
 } from "../../auth.js";
 import { auth } from "../../better-auth.js";
-import { account, users } from "../../db/schema.js";
-import { createTRPCRouter, publicProcedure, sessionProcedure } from "../init.js";
-
-const loginInput = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
+import { users } from "../../db/schema.js";
+import { createTRPCRouter, sessionProcedure } from "../init.js";
 
 const changePasswordInput = z.object({
   currentPassword: z.string().min(1),
@@ -25,42 +17,6 @@ const changePasswordInput = z.object({
 });
 
 export const authRouter = createTRPCRouter({
-  login: publicProcedure.input(loginInput).mutation(async ({ ctx, input }) => {
-    const normalizedEmail = input.email.toLowerCase();
-    const [row] = await ctx.db
-      .select({
-        user: users,
-        password: account.password,
-      })
-      .from(users)
-      .innerJoin(account, eq(account.userId, users.id))
-      .where(eq(users.email, normalizedEmail))
-      .limit(1);
-    if (!row?.password || !(await verifyPassword({ password: input.password, hash: row.password }))) {
-      throw new TRPCError({ code: "UNAUTHORIZED", message: "invalid credentials" });
-    }
-    if (row.user.banned) {
-      throw new TRPCError({ code: "FORBIDDEN", message: "inactive user" });
-    }
-    const scope = await resolveScopeForUser(ctx.db, row.user.id);
-    return {
-      access_token: issueAccessToken({
-        userId: row.user.id,
-        role: scope.role,
-        groupScope: scope.groupScope,
-      }),
-      token_type: "bearer",
-      expires_in: getSettings().AUTH_TOKEN_TTL_SECONDS,
-      user: {
-        id: row.user.id,
-        email: row.user.email,
-        must_change_password: row.user.mustChangePassword,
-        role: scope.role,
-        group_scope: scope.groupScope,
-      },
-    };
-  }),
-
   me: sessionProcedure.query(async ({ ctx }) => {
     if (!ctx.auth) {
       throw new TRPCError({ code: "UNAUTHORIZED", message: "missing auth context" });
@@ -83,6 +39,9 @@ export const authRouter = createTRPCRouter({
   changePassword: sessionProcedure.input(changePasswordInput).mutation(async ({ ctx, input }) => {
     if (!ctx.auth) {
       throw new TRPCError({ code: "UNAUTHORIZED", message: "missing auth context" });
+    }
+    if (ctx.auth.sessionId === "legacy-bearer") {
+      throw new TRPCError({ code: "UNAUTHORIZED", message: "password changes require a Better Auth session" });
     }
     const violations = passwordPolicyViolations(input.newPassword);
     if (violations.length > 0) {

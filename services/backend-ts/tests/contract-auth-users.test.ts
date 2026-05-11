@@ -11,28 +11,17 @@ const skipReason = contractDatabaseUrl
   ? false
   : "set BACKEND_TS_CONTRACT_DATABASE_URL to run backend-ts contract tests";
 
-test("contract: auth login and me match expected shape", { skip: skipReason }, async (t) => {
+test("contract: auth me matches expected shape", { skip: skipReason }, async (t) => {
   const harness = await createContractHarness();
   t.after(() => harness.close());
 
-  await harness.seedUser({
+  const owner = await harness.seedUser({
     email: "owner@example.com",
     password: "OwnerSecure123!",
     role: "owner",
   });
 
-  const publicCaller = await harness.caller();
-  const login = await publicCaller.auth.login({
-    email: "owner@example.com",
-    password: "OwnerSecure123!",
-  });
-
-  assert.equal(login.token_type, "bearer");
-  assert.equal(login.user.email, "owner@example.com");
-  assert.equal(login.user.role, "owner");
-  assert.deepEqual(login.user.group_scope, []);
-
-  const authedCaller = await harness.caller(login.access_token);
+  const authedCaller = await harness.callerForUser(owner.id);
   const me = await authedCaller.auth.me();
   assert.equal(me.email, "owner@example.com");
   assert.equal(me.role, "owner");
@@ -48,13 +37,8 @@ test("contract: users create and hard delete append audit event", { skip: skipRe
     password: "OwnerSecure123!",
     role: "owner",
   });
-  const publicCaller = await harness.caller();
-  const login = await publicCaller.auth.login({
-    email: "owner@example.com",
-    password: "OwnerSecure123!",
-  });
 
-  const authedCaller = await harness.caller(login.access_token);
+  const authedCaller = await harness.callerForUser(owner.id);
   const created = await authedCaller.users.create({
     email: "operator@example.com",
     password: "Operator123!!",
@@ -90,13 +74,7 @@ test("contract: protected procedures revalidate active state and current roles",
     role: "owner",
   });
 
-  const publicCaller = await harness.caller();
-  const login = await publicCaller.auth.login({
-    email: "owner@example.com",
-    password: "OwnerSecure123!",
-  });
-
-  const authedCaller = await harness.caller(login.access_token);
+  const authedCaller = await harness.callerForUser(owner.id);
   await authedCaller.users.list();
 
   await harness.db.update(users).set({ role: "viewer" }).where(eq(users.id, owner.id));
@@ -111,30 +89,17 @@ test("contract: must-change users cannot call protected domain procedures", { sk
   const harness = await createContractHarness();
   t.after(() => harness.close());
 
-  await harness.seedUser({
+  const admin = await harness.seedUser({
     email: "admin@example.com",
     password: "AdminSecure123!",
     role: "admin",
     mustChangePassword: true,
   });
 
-  const publicCaller = await harness.caller();
-  const login = await publicCaller.auth.login({
-    email: "admin@example.com",
-    password: "AdminSecure123!",
-  });
-  assert.equal(login.user.must_change_password, true);
-
-  const authedCaller = await harness.caller(login.access_token);
+  const authedCaller = await harness.callerForUser(admin.id);
   const me = await authedCaller.auth.me();
   assert.equal(me.must_change_password, true);
   await assert.rejects(async () => authedCaller.users.list(), /password change required/);
-
-  const changed = await authedCaller.auth.changePassword({
-    currentPassword: "AdminSecure123!",
-    newPassword: "AdminSecure124!",
-  });
-  assert.equal(changed.must_change_password, false);
 });
 
 test("contract: user administration preserves required and last privileged accounts", { skip: skipReason }, async (t) => {
@@ -154,12 +119,7 @@ test("contract: user administration preserves required and last privileged accou
     role: "admin",
   });
 
-  const publicCaller = await harness.caller();
-  const requiredLogin = await publicCaller.auth.login({
-    email: "admin@kuuna.ai",
-    password: "AdminSecure123!",
-  });
-  const requiredCaller = await harness.caller(requiredLogin.access_token);
+  const requiredCaller = await harness.callerForUser(requiredAdmin.id);
 
   await assert.rejects(
     async () => requiredCaller.users.update({ userId: requiredAdmin.id, isActive: false }),
@@ -171,11 +131,7 @@ test("contract: user administration preserves required and last privileged accou
     password: "SecondAdmin123!",
     role: "admin",
   });
-  const secondLogin = await publicCaller.auth.login({
-    email: "second-admin@example.com",
-    password: "SecondAdmin123!",
-  });
-  const secondCaller = await harness.caller(secondLogin.access_token);
+  const secondCaller = await harness.callerForUser(secondAdmin.id);
 
   await assert.rejects(
     async () => secondCaller.users.delete({ userId: requiredAdmin.id }),

@@ -421,15 +421,10 @@ test("contract: customer docs list all docs for provider group", { skip: skipRea
 });
 
 async function authedCaller(harness: Awaited<ReturnType<typeof createContractHarness>>) {
-  await harness.seedUser({
+  const owner = await harness.seedUser({
     email: "owner@example.com",
     password: "OwnerSecure123!",
     role: "owner",
   });
-  const publicCaller = await harness.caller();
-  const login = await publicCaller.auth.login({
-    email: "owner@example.com",
-    password: "OwnerSecure123!",
-  });
-  return harness.caller(login.access_token);
+  return harness.callerForUser(owner.id);
 }
