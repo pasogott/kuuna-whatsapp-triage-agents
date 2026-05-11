@@ -22,6 +22,8 @@ import {
   kuunaBindingId,
   kuunaProviderGroupId,
   openAiApiKey,
+  piAuthPath,
+  piTransport,
 } from "./config.js";
 import { getOpenAiModel, modelPath, piThinkingLevel } from "./model.js";
 import { analyzeRuntimeMedia } from "./media-insights.js";
@@ -128,8 +130,9 @@ async function runPiAttempt(
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: false },
     retry: { enabled: true, maxRetries: 1 },
+    transport: piTransport(),
   });
-  const authStorage = AuthStorage.inMemory();
+  const authStorage = piAuthPath() ? AuthStorage.create(piAuthPath()) : AuthStorage.create();
   const apiKey = openAiApiKey();
   if (apiKey) {
     authStorage.setRuntimeApiKey("openai", apiKey);

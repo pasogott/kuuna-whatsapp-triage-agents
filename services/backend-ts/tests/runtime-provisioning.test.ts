@@ -37,6 +37,8 @@ const baseSettings: Settings = {
   OPENAI_EMBEDDING_MODEL: "text-embedding-3-small",
   OPENAI_AUDIO_TRANSCRIPTION_MODEL: "gpt-4o-mini-transcribe",
   OPENAI_VISION_MODEL: "gpt-4.1-mini",
+  PI_TRANSPORT: "websocket-cached",
+  PI_AUTH_CONTAINER_PATH: "/runtime-data/pi-auth.json",
   S3_BUCKET: "kuuna-dev",
   S3_REGION: "us-east-1",
   MEDIA_PROCESSING_ENABLED: true,
@@ -134,11 +136,13 @@ function matchingContainer(runtimeIdentity: RuntimeIdentity, running: boolean): 
 function buildDesiredHash(runtimeIdentity: RuntimeIdentity): string {
   const labels = buildRuntimeLabels(runtimeIdentity);
   const env = buildRuntimeEnv(runtimeIdentity, baseSettings);
+  const binds = [`${dataVolumeName(runtimeIdentity.containerName, baseSettings)}:${baseSettings.RUNTIME_CONTAINER_DATA_DIR}`];
   return createHash("sha256")
     .update(JSON.stringify({
       image: "kuuna-runtime-agent-ts:dev",
       imageId: "sha256:runtime-dev",
       env: [...env].sort(),
+      binds: [...binds].sort(),
       labels: Object.entries(labels).sort(([left], [right]) => left.localeCompare(right)),
     }))
     .digest("hex");
@@ -180,6 +184,34 @@ test("provisionRuntimeContainer creates a lazy per-chat container and volume", a
     assert.equal(payload.HostConfig.NetworkMode, "kuuna-dev_default");
     assert.equal(payload.Labels["dev.kuuna.provider-group-id"], runtimeIdentity.providerGroupId);
     assert.ok(payload.Env.includes(`KUUNA_PROVIDER_GROUP_ID=${runtimeIdentity.providerGroupId}`));
+    assert.ok(payload.Env.includes("PI_TRANSPORT=websocket-cached"));
+  });
+});
+
+test("provisionRuntimeContainer mounts Pi auth file when configured", async () => {
+  await withHealthyRuntime(async () => {
+    const runtimeIdentity = identity();
+    const docker = new FakeDockerClient();
+
+    await provisionRuntimeContainer(docker, {
+      identity: runtimeIdentity,
+      image: "kuuna-runtime-agent-ts:dev",
+      settings: {
+        ...baseSettings,
+        PI_AUTH_HOST_PATH: "/Users/flo/.pi/agent/auth.json",
+        PI_AUTH_CONTAINER_PATH: "/runtime-data/pi-auth.json",
+      },
+    });
+
+    const payload = docker.createdPayloads[0] as {
+      HostConfig: { Binds: string[] };
+      Env: string[];
+    };
+    assert.deepEqual(payload.HostConfig.Binds, [
+      `${dataVolumeName(runtimeIdentity.containerName, baseSettings)}:/runtime-data`,
+      "/Users/flo/.pi/agent/auth.json:/runtime-data/pi-auth.json:ro",
+    ]);
+    assert.ok(payload.Env.includes("PI_AUTH_PATH=/runtime-data/pi-auth.json"));
   });
 });
 

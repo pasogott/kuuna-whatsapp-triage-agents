@@ -164,6 +164,8 @@ are ignored by git.
 Useful local overrides:
 
 - `OPENAI_API_KEY` in `infra/env/backend.env.local`
+- `PI_TRANSPORT=websocket-cached` for pi's cached OpenAI WebSocket transport
+- `PI_AUTH_HOST_PATH=$HOME/.pi/agent/auth.json` to mount credentials created by `pi` `/login` into runtime containers
 - `AGENT_MENTION_IDS` in `infra/env/backend.env.local` for the real bot JID(s)
 - `DASHBOARD_REQUIRED_ADMIN_PASSWORD` in both backend and dashboard local env files
 - `GATEWAY_SERVICE_TOKEN`, `GATEWAY_OPS_TOKEN`, and `INTERNAL_OPS_TOKEN` when testing token enforcement

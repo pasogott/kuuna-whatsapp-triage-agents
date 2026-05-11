@@ -9,6 +9,8 @@ export {
   openAiApiKey,
   openAiBaseUrl,
   openAiTimeoutSeconds,
+  piAuthPath,
+  piTransport,
 } from "./config.js";
 export { getOpenAiModel, modelPath, normalizeModelName, piThinkingLevel } from "./model.js";
 export { buildPrompt, type PromptAssembly } from "./prompt.js";

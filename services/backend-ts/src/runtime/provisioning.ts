@@ -25,6 +25,8 @@ const reservedRuntimeEnvKeys = new Set([
   "OPENAI_AUDIO_TRANSCRIPTION_MODEL",
   "OPENAI_TIMEOUT_SECONDS",
   "OPENAI_VISION_MODEL",
+  "PI_AUTH_PATH",
+  "PI_TRANSPORT",
   "RUNTIME_AGENT_DEFAULT_MODEL",
   "RUNTIME_AGENT_REASONING_EFFORT",
   "KUUNA_PROVIDER_GROUP_ID",
@@ -203,10 +205,12 @@ export async function provisionRuntimeContainer(
   });
   const baseLabels = buildRuntimeLabels(input.identity);
   const env = buildRuntimeEnv(input.identity, input.settings);
+  const binds = buildRuntimeBinds(input.identity.containerName, input.settings);
   const labels = withRuntimeConfigLabels(baseLabels, {
     image: input.image,
     imageId: imageInspect.Id,
     env,
+    binds,
   });
 
   const existing = await dockerClient.inspectContainer(input.identity.containerName);
@@ -220,8 +224,7 @@ export async function provisionRuntimeContainer(
         env,
         labels,
         containerName: input.identity.containerName,
-        dataVolumeName: dataVolumeName(input.identity.containerName, input.settings),
-        dataDir: input.settings.RUNTIME_CONTAINER_DATA_DIR,
+        binds,
         dockerNetwork,
       }),
     )).Id;
@@ -242,8 +245,7 @@ export async function provisionRuntimeContainer(
           env,
           labels,
           containerName: input.identity.containerName,
-          dataVolumeName: dataVolumeName(input.identity.containerName, input.settings),
-          dataDir: input.settings.RUNTIME_CONTAINER_DATA_DIR,
+          binds,
           dockerNetwork,
         }),
       )).Id;
@@ -314,6 +316,7 @@ export function buildRuntimeEnv(identity: RuntimeIdentity, settings: Settings): 
     OPENAI_AUDIO_TRANSCRIPTION_MODEL: settings.OPENAI_AUDIO_TRANSCRIPTION_MODEL,
     OPENAI_TIMEOUT_SECONDS: String(settings.OPENAI_TIMEOUT_SECONDS),
     OPENAI_VISION_MODEL: settings.OPENAI_VISION_MODEL,
+    PI_TRANSPORT: settings.PI_TRANSPORT,
     RUNTIME_AGENT_DEFAULT_MODEL: defaultRuntimeModel,
     RUNTIME_AGENT_REASONING_EFFORT: defaultReasoningEffort,
     KUUNA_PROVIDER_GROUP_ID: identity.providerGroupId,
@@ -329,6 +332,9 @@ export function buildRuntimeEnv(identity: RuntimeIdentity, settings: Settings): 
   }
   if (settings.OPENAI_API_KEY?.trim()) {
     env.OPENAI_API_KEY = settings.OPENAI_API_KEY;
+  }
+  if (settings.PI_AUTH_HOST_PATH?.trim()) {
+    env.PI_AUTH_PATH = settings.PI_AUTH_CONTAINER_PATH;
   }
   Object.assign(env, parseExtraEnv(settings.RUNTIME_CONTAINER_EXTRA_ENV_JSON));
   return Object.entries(env).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}=${value}`);
@@ -369,13 +375,14 @@ export function parseExtraEnv(rawValue: string | undefined): Record<string, stri
 
 export function withRuntimeConfigLabels(
   labels: Record<string, string>,
-  input: { image: string; imageId: string; env: string[] },
+  input: { image: string; imageId: string; env: string[]; binds: string[] },
 ): Record<string, string> {
   const next: Record<string, string> = { ...labels, [runtimeImageIdLabel]: input.imageId };
   next[runtimeConfigHashLabel] = runtimeConfigHash({
     image: input.image,
     imageId: input.imageId,
     env: input.env,
+    binds: input.binds,
     labels,
   });
   return next;
@@ -385,6 +392,7 @@ function runtimeConfigHash(input: {
   image: string;
   imageId: string;
   env: string[];
+  binds: string[];
   labels: Record<string, string>;
 }): string {
   return createHash("sha256")
@@ -392,9 +400,19 @@ function runtimeConfigHash(input: {
       image: input.image,
       imageId: input.imageId,
       env: [...input.env].sort(),
+      binds: [...input.binds].sort(),
       labels: Object.entries(input.labels).sort(([left], [right]) => left.localeCompare(right)),
     }))
     .digest("hex");
+}
+
+function buildRuntimeBinds(containerName: string, settings: Settings): string[] {
+  const binds = [`${dataVolumeName(containerName, settings)}:${settings.RUNTIME_CONTAINER_DATA_DIR}`];
+  const piAuthHostPath = normalizeOptional(settings.PI_AUTH_HOST_PATH);
+  if (piAuthHostPath) {
+    binds.push(`${piAuthHostPath}:${settings.PI_AUTH_CONTAINER_PATH}:ro`);
+  }
+  return binds;
 }
 
 function buildCreateContainerPayload(input: {
@@ -403,8 +421,7 @@ function buildCreateContainerPayload(input: {
   env: string[];
   labels: Record<string, string>;
   containerName: string;
-  dataVolumeName: string;
-  dataDir: string;
+  binds: string[];
   dockerNetwork: string | null;
 }): DockerCreateContainerPayload {
   const exposedPort = `${input.port}/tcp`;
@@ -415,7 +432,7 @@ function buildCreateContainerPayload(input: {
     ExposedPorts: { [exposedPort]: {} },
     HostConfig: {
       RestartPolicy: { Name: "unless-stopped" },
-      Binds: [`${input.dataVolumeName}:${input.dataDir}`],
+      Binds: input.binds,
     },
   };
   if (input.dockerNetwork) {

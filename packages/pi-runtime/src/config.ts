@@ -3,9 +3,11 @@ import {
   DEFAULT_REASONING_EFFORT,
   type ReasoningEffort,
 } from "@kuuna/agent-contracts";
+import type { Transport } from "@mariozechner/pi-ai";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const MAX_MODEL_ATTEMPTS = 2;
+const DEFAULT_PI_TRANSPORT: Transport = "websocket-cached";
 
 export function openAiApiKey(): string | undefined {
   const value = process.env.OPENAI_API_KEY?.trim();
@@ -19,6 +21,19 @@ export function openAiBaseUrl(): string {
 
 export function openAiTimeoutSeconds(): string {
   return process.env.OPENAI_TIMEOUT_SECONDS ?? "30";
+}
+
+export function piAuthPath(): string | undefined {
+  const value = process.env.PI_AUTH_PATH?.trim() || process.env.PI_AUTH_FILE?.trim();
+  return value || undefined;
+}
+
+export function piTransport(): Transport {
+  const value = process.env.PI_TRANSPORT?.trim();
+  if (value === "sse" || value === "websocket" || value === "websocket-cached" || value === "auto") {
+    return value;
+  }
+  return DEFAULT_PI_TRANSPORT;
 }
 
 export function openAiTimeoutMs(): number {

@@ -6,6 +6,8 @@ import {
   openAiApiKey,
   openAiBaseUrl,
   openAiTimeoutSeconds,
+  piAuthPath,
+  piTransport,
 } from "@kuuna/pi-runtime";
 
 import { host, port } from "./config.js";
@@ -38,6 +40,8 @@ const server = createServer(async (request, response) => {
         openai_configured: Boolean(openAiApiKey()),
         openai_base_url: openAiBaseUrl(),
         openai_timeout_seconds: openAiTimeoutSeconds(),
+        pi_auth_path: piAuthPath() ?? null,
+        pi_transport: piTransport(),
         default_model: defaultModel(),
         reasoning_effort: defaultReasoningEffort(),
         runtime: "pi-typescript",
