@@ -66,6 +66,8 @@ class FakeDockerClient implements DockerClient {
   startedContainers: string[] = [];
   removedContainers: string[] = [];
   connectedNetworks: string[] = [];
+  inspectedImages: string[] = [];
+  missingImages = new Set<string>();
   nextContainerId = "container-new";
 
   async inspectContainer(containerNameOrId: string): Promise<DockerContainerInspect | null> {
@@ -75,7 +77,11 @@ class FakeDockerClient implements DockerClient {
     return this.container;
   }
 
-  async inspectImage(): Promise<{ Id: string }> {
+  async inspectImage(image: string): Promise<{ Id: string }> {
+    this.inspectedImages.push(image);
+    if (this.missingImages.has(image)) {
+      throw new Error(`No such image: ${image}`);
+    }
     return { Id: "sha256:runtime-dev" };
   }
 
@@ -293,6 +299,29 @@ test("provisionRuntimeContainer recreates stale managed containers", async () =>
     assert.deepEqual(docker.removedContainers, ["container-existing"]);
     assert.equal(docker.createdPayloads.length, 1);
     assert.deepEqual(docker.startedContainers, ["container-new"]);
+  });
+});
+
+test("provisionRuntimeContainer falls back when stored template image is missing", async () => {
+  await withHealthyRuntime(async () => {
+    const runtimeIdentity = identity();
+    const docker = new FakeDockerClient();
+    docker.missingImages.add("kuuna/template-support-default@sha256:missing");
+
+    await provisionRuntimeContainer(docker, {
+      identity: runtimeIdentity,
+      image: "kuuna/template-support-default@sha256:missing",
+      fallbackImage: "kuuna-runtime-agent-ts:dev",
+      settings: baseSettings,
+    });
+
+    assert.deepEqual(docker.inspectedImages, [
+      "kuuna/template-support-default@sha256:missing",
+      "kuuna-runtime-agent-ts:dev",
+    ]);
+    const payload = docker.createdPayloads[0] as { Image: string; Labels: Record<string, string> };
+    assert.equal(payload.Image, "kuuna-runtime-agent-ts:dev");
+    assert.ok(payload.Labels["dev.kuuna.runtime-config-hash"]);
   });
 });
 

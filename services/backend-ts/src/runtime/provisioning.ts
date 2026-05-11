@@ -144,6 +144,7 @@ export async function ensureRuntimeForChat(
     await acquireChatProvisioningLock(tx, input.providerGroupId);
     const target = await resolveProvisioningTarget(tx, input.providerGroupId);
     const image = target.imageRef || settings.RUNTIME_AGENT_IMAGE.trim();
+    const fallbackImage = target.imageRef ? normalizeOptional(settings.RUNTIME_AGENT_IMAGE) : null;
     if (!image) {
       throw new RuntimeProvisioningError("runtime_image_required", "runtime image is required");
     }
@@ -159,6 +160,7 @@ export async function ensureRuntimeForChat(
     const result = await provisionRuntimeContainer(dockerClient, {
       identity,
       image,
+      fallbackImage: fallbackImage && fallbackImage !== image ? fallbackImage : undefined,
       settings,
     });
 
@@ -192,22 +194,20 @@ export async function provisionRuntimeContainer(
   input: {
     identity: RuntimeIdentity;
     image: string;
+    fallbackImage?: string;
     settings: Settings;
   },
 ): Promise<RuntimeProvisioningResult> {
   const port = input.settings.RUNTIME_AGENT_CONTAINER_PORT;
   const dockerNetwork = normalizeOptional(input.settings.RUNTIME_DOCKER_NETWORK);
-  const imageInspect = await dockerClient.inspectImage(input.image).catch((error: unknown) => {
-    throw new RuntimeProvisioningError(
-      "runtime_image_inspect_failed",
-      `failed to inspect runtime image ${input.image}: ${errorMessage(error)}`,
-    );
-  });
+  const resolvedImage = await inspectRuntimeImage(dockerClient, input.image, input.fallbackImage);
+  const image = resolvedImage.image;
+  const imageInspect = resolvedImage.inspect;
   const baseLabels = buildRuntimeLabels(input.identity);
   const env = buildRuntimeEnv(input.identity, input.settings);
   const binds = buildRuntimeBinds(input.identity.containerName, input.settings);
   const labels = withRuntimeConfigLabels(baseLabels, {
-    image: input.image,
+    image,
     imageId: imageInspect.Id,
     env,
     binds,
@@ -219,7 +219,7 @@ export async function provisionRuntimeContainer(
     containerId = (await dockerClient.createContainer(
       input.identity.containerName,
       buildCreateContainerPayload({
-        image: input.image,
+        image,
         port,
         env,
         labels,
@@ -230,7 +230,7 @@ export async function provisionRuntimeContainer(
     )).Id;
   } else {
     assertManagedContainerIdentity(existing, input.identity);
-    if (!containerMatchesRuntimeConfig(existing, input.image, imageInspect.Id, labels)) {
+    if (!containerMatchesRuntimeConfig(existing, image, imageInspect.Id, labels)) {
       await dockerClient.removeContainer(existing.Id).catch((error: unknown) => {
         throw new RuntimeProvisioningError(
           "runtime_container_remove_failed",
@@ -240,7 +240,7 @@ export async function provisionRuntimeContainer(
       containerId = (await dockerClient.createContainer(
         input.identity.containerName,
         buildCreateContainerPayload({
-          image: input.image,
+          image,
           port,
           env,
           labels,
@@ -404,6 +404,32 @@ function runtimeConfigHash(input: {
       labels: Object.entries(input.labels).sort(([left], [right]) => left.localeCompare(right)),
     }))
     .digest("hex");
+}
+
+async function inspectRuntimeImage(
+  dockerClient: DockerClient,
+  image: string,
+  fallbackImage: string | undefined,
+): Promise<{ image: string; inspect: DockerImageInspect }> {
+  try {
+    return { image, inspect: await dockerClient.inspectImage(image) };
+  } catch (error) {
+    if (!fallbackImage) {
+      throw new RuntimeProvisioningError(
+        "runtime_image_inspect_failed",
+        `failed to inspect runtime image ${image}: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  try {
+    return { image: fallbackImage, inspect: await dockerClient.inspectImage(fallbackImage) };
+  } catch (fallbackError) {
+    throw new RuntimeProvisioningError(
+      "runtime_image_inspect_failed",
+      `failed to inspect runtime image ${image}; fallback image ${fallbackImage} also failed: ${errorMessage(fallbackError)}`,
+    );
+  }
 }
 
 function buildRuntimeBinds(containerName: string, settings: Settings): string[] {
