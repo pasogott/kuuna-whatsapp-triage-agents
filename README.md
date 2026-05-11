@@ -163,7 +163,7 @@ are ignored by git.
 
 Useful local overrides:
 
-- `OPENAI_API_KEY` in `infra/env/backend.env.local`
+- `OPENAI_API_KEY` in `infra/env/backend.env.local` for embeddings, retrieval query vectors, and media analysis/transcription
 - `PI_TRANSPORT=websocket-cached` for pi's cached OpenAI WebSocket transport
 - `PI_AUTH_HOST_PATH=$HOME/.pi/agent/auth.json` to mount credentials created by `pi` `/login` into runtime containers
 - `AGENT_MENTION_IDS` in `infra/env/backend.env.local` for the real bot JID(s)
@@ -192,14 +192,22 @@ Then mount the generated Pi auth file into managed runtime containers from
 `infra/env/backend.env.local`:
 
 ```bash
-OPENAI_API_KEY=
+OPENAI_API_KEY=sk-...
 PI_TRANSPORT=websocket-cached
 PI_AUTH_HOST_PATH=$HOME/.pi/agent/auth.json
 PI_AUTH_CONTAINER_PATH=/runtime-data/pi-auth.json
 ```
 
-`OPENAI_API_KEY` still works as an explicit API-key override. Leave it empty
-when the runtime should use the mounted ChatGPT login credentials.
+Pi ChatGPT auth is only used for the agent LLM session. Keep `OPENAI_API_KEY`
+configured when you want real embeddings for Knowledge indexing and retrieval
+queries, or when runtime `media_analyze` should use the configured vision and
+audio transcription models. If the key is empty, embeddings fall back to local
+pseudo-embeddings and media analysis is skipped with `openai_api_key_missing`.
+
+When both are configured, the runtime still uses the mounted ChatGPT login for
+Pi OpenAI models, while the API key remains available for embeddings and media
+tools. `OPENAI_API_KEY` also remains an explicit API-key override for runtime
+model calls when no Pi auth file is mounted.
 
 ### Development Start
 Run the full development stack from the repository root:
