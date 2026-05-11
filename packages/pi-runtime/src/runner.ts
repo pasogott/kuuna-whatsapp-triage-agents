@@ -5,7 +5,7 @@ import {
   ModelRegistry,
   SessionManager,
   SettingsManager,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_REASONING_EFFORT,
   runtimeAgentRequestSchema,
@@ -21,7 +21,6 @@ import {
   kuunaAgentInstanceId,
   kuunaBindingId,
   kuunaProviderGroupId,
-  openAiApiKey,
   piAuthPath,
   piTransport,
 } from "./config.js";
@@ -29,10 +28,6 @@ import { getOpenAiModel, modelPath, piThinkingLevel } from "./model.js";
 import { analyzeRuntimeMedia } from "./media-insights.js";
 import { buildPrompt } from "./prompt.js";
 import { createKuunaTools, executeExplicitTool, sanitizeAllowedTools } from "./tools.js";
-
-function placeholderResponse(modelName: string, request: RuntimeAgentRequest): string {
-  return [`[${modelName}] Processed request.`, `User: ${request.user_prompt}`].join("\n");
-}
 
 function lastAssistantText(messages: unknown[]): string {
   for (const message of messages.slice().reverse()) {
@@ -118,6 +113,9 @@ async function runPiAttempt(
   allowedTools: string[],
   mediaInsights: RuntimeMediaInsight[],
 ): Promise<{ responseText: string; toolResults: ToolExecutionResult[] }> {
+  if (!piAuthPath()) {
+    throw new Error("pi_chatgpt_auth_required_for_agent_llm");
+  }
   const model = getOpenAiModel(modelName);
   if (!model) {
     throw new Error(`OpenAI model '${modelName}' is not available in Pi model registry`);
@@ -133,10 +131,6 @@ async function runPiAttempt(
     transport: piTransport(),
   });
   const authStorage = piAuthPath() ? AuthStorage.create(piAuthPath()) : AuthStorage.create();
-  const apiKey = openAiApiKey();
-  if (apiKey) {
-    authStorage.setRuntimeApiKey("openai", apiKey);
-  }
   const modelRegistry = ModelRegistry.inMemory(authStorage);
   const resourceLoader = new DefaultResourceLoader({
     cwd: process.cwd(),
@@ -215,14 +209,9 @@ export async function runAgent(input: unknown): Promise<RuntimeAgentResult> {
 
   for (const modelName of selectedModelPath) {
     try {
-      if (!openAiApiKey() && !piAuthPath()) {
-        responseText = placeholderResponse(modelName || defaultModel(), enrichedRequest);
-        modelToolResults = [];
-      } else {
-        const result = await runPiAttempt(enrichedRequest, modelName, allowedTools, mediaInsights);
-        responseText = result.responseText;
-        modelToolResults = result.toolResults;
-      }
+      const result = await runPiAttempt(enrichedRequest, modelName, allowedTools, mediaInsights);
+      responseText = result.responseText;
+      modelToolResults = result.toolResults;
       attempts.push({ model: modelName, success: true });
       modelUsed = modelName;
       break;

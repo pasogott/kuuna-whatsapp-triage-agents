@@ -3,7 +3,7 @@ import {
   DEFAULT_REASONING_EFFORT,
   type ReasoningEffort,
 } from "@kuuna/agent-contracts";
-import type { Transport } from "@mariozechner/pi-ai";
+import type { Transport } from "@earendil-works/pi-ai";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const MAX_MODEL_ATTEMPTS = 2;

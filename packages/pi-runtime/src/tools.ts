@@ -5,7 +5,7 @@ import {
   type BashToolDetails,
   type BashToolInput,
   type ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
   runtimeMediaAttachmentSchema,
   runtimeToolSearchRequestSchema,

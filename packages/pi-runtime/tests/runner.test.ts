@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_OPENAI_BASE_URL } from "../src/config.js";
 import { getOpenAiModel } from "../src/model.js";
 import { runAgent } from "../src/runner.js";
 import { isBashCommandAllowed, sanitizeAllowedTools } from "../src/tools.js";
@@ -51,75 +50,65 @@ test("python allowlist covers python family and useful code execution forms", ()
   assert.equal(isBashCommandAllowed("python - <<PY\nprint('hi')\nPY", ["python"]), false);
 });
 
-test("uses gpt-5.5 and medium reasoning by default", async () => {
+test("requires Pi ChatGPT auth for agent LLM calls", async () => {
   const previousApiKey = process.env.OPENAI_API_KEY;
+  const previousPiAuthPath = process.env.PI_AUTH_PATH;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.PI_AUTH_PATH;
   try {
     const result = await runAgent({
       user_prompt: "Please uppercase hello",
       allowed_tools: ["uppercase"],
     });
 
-    assert.equal(result.success, true);
-    assert.equal(result.model_used, "gpt-5.5");
+    assert.equal(result.success, false);
     assert.equal(result.reasoning_effort, "medium");
     assert.equal(result.attempts[0]?.model, "gpt-5.5");
+    assert.match(result.error ?? "", /pi_chatgpt_auth_required_for_agent_llm/);
   } finally {
     if (previousApiKey === undefined) {
       delete process.env.OPENAI_API_KEY;
     } else {
       process.env.OPENAI_API_KEY = previousApiKey;
     }
+    if (previousPiAuthPath === undefined) delete process.env.PI_AUTH_PATH;
+    else process.env.PI_AUTH_PATH = previousPiAuthPath;
   }
 });
 
-test("applies OPENAI_BASE_URL to Pi OpenAI models", () => {
-  const previousBaseUrl = process.env.OPENAI_BASE_URL;
+test("uses Pi OpenAI Codex provider even when only an API key is configured", () => {
   const previousApiKey = process.env.OPENAI_API_KEY;
   const previousPiAuthPath = process.env.PI_AUTH_PATH;
   process.env.OPENAI_API_KEY = "test-key";
   delete process.env.PI_AUTH_PATH;
-  process.env.OPENAI_BASE_URL = "http://openai-proxy:4000/v1/";
   try {
     const model = getOpenAiModel("gpt-5.5");
 
-    assert.equal(model?.provider, "openai");
-    assert.equal(model?.baseUrl, "http://openai-proxy:4000/v1");
+    assert.equal(model?.provider, "openai-codex");
+    assert.equal(model?.id, "gpt-5.5");
   } finally {
     if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousApiKey;
     if (previousPiAuthPath === undefined) delete process.env.PI_AUTH_PATH;
     else process.env.PI_AUTH_PATH = previousPiAuthPath;
-    if (previousBaseUrl === undefined) {
-      delete process.env.OPENAI_BASE_URL;
-    } else {
-      process.env.OPENAI_BASE_URL = previousBaseUrl;
-    }
   }
 });
 
-test("uses the default OpenAI base URL when OPENAI_BASE_URL is blank", () => {
-  const previousBaseUrl = process.env.OPENAI_BASE_URL;
+test("ignores explicit OpenAI API provider prefixes for agent models", () => {
   const previousApiKey = process.env.OPENAI_API_KEY;
   const previousPiAuthPath = process.env.PI_AUTH_PATH;
   process.env.OPENAI_API_KEY = "test-key";
-  delete process.env.PI_AUTH_PATH;
-  process.env.OPENAI_BASE_URL = " ";
+  process.env.PI_AUTH_PATH = "/tmp/pi-auth.json";
   try {
-    const model = getOpenAiModel("gpt-5.5");
+    const model = getOpenAiModel("openai/gpt-5.5");
 
-    assert.equal(model?.provider, "openai");
-    assert.equal(model?.baseUrl, DEFAULT_OPENAI_BASE_URL);
+    assert.equal(model?.provider, "openai-codex");
+    assert.equal(model?.id, "gpt-5.5");
   } finally {
     if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousApiKey;
     if (previousPiAuthPath === undefined) delete process.env.PI_AUTH_PATH;
     else process.env.PI_AUTH_PATH = previousPiAuthPath;
-    if (previousBaseUrl === undefined) {
-      delete process.env.OPENAI_BASE_URL;
-    } else {
-      process.env.OPENAI_BASE_URL = previousBaseUrl;
-    }
   }
 });
 
@@ -127,6 +116,24 @@ test("uses Pi OpenAI Codex provider when only ChatGPT auth is configured", () =>
   const previousApiKey = process.env.OPENAI_API_KEY;
   const previousPiAuthPath = process.env.PI_AUTH_PATH;
   delete process.env.OPENAI_API_KEY;
+  process.env.PI_AUTH_PATH = "/tmp/pi-auth.json";
+  try {
+    const model = getOpenAiModel("gpt-5.5");
+
+    assert.equal(model?.provider, "openai-codex");
+    assert.equal(model?.id, "gpt-5.5");
+  } finally {
+    if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousApiKey;
+    if (previousPiAuthPath === undefined) delete process.env.PI_AUTH_PATH;
+    else process.env.PI_AUTH_PATH = previousPiAuthPath;
+  }
+});
+
+test("uses Pi OpenAI Codex provider for agent models when ChatGPT auth and API key are both configured", () => {
+  const previousApiKey = process.env.OPENAI_API_KEY;
+  const previousPiAuthPath = process.env.PI_AUTH_PATH;
+  process.env.OPENAI_API_KEY = "test-key";
   process.env.PI_AUTH_PATH = "/tmp/pi-auth.json";
   try {
     const model = getOpenAiModel("gpt-5.5");
@@ -162,7 +169,7 @@ test("rejects runtime requests for another provider group", async () => {
   }
 });
 
-test("accepts runtime requests matching container identity", async () => {
+test("keeps runtime identity checks but still requires Pi ChatGPT auth", async () => {
   const previousApiKey = process.env.OPENAI_API_KEY;
   const previousProviderGroupId = process.env.KUUNA_PROVIDER_GROUP_ID;
   const previousBindingId = process.env.KUUNA_BINDING_ID;
@@ -181,8 +188,9 @@ test("accepts runtime requests matching container identity", async () => {
       },
     });
 
-    assert.equal(result.success, true);
-    assert.equal(result.model_used, "gpt-5.5");
+    assert.equal(result.success, false);
+    assert.equal(result.model_used, null);
+    assert.match(result.error ?? "", /pi_chatgpt_auth_required_for_agent_llm/);
   } finally {
     if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousApiKey;
@@ -195,7 +203,7 @@ test("accepts runtime requests matching container identity", async () => {
   }
 });
 
-test("executes explicit todo_create requests inside runtime container", async () => {
+test("does not execute explicit runtime tools as an agent fallback without Pi ChatGPT auth", async () => {
   const previousApiKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
   try {
@@ -218,17 +226,9 @@ test("executes explicit todo_create requests inside runtime container", async ()
       ],
     });
 
-    assert.equal(result.success, true);
-    assert.equal(result.tool_results.length, 1);
-    assert.equal(result.tool_results[0]?.name, "todo_create");
-    assert.equal(result.tool_results[0]?.ok, true);
-    assert.deepEqual(result.tool_results[0]?.details, {
-      operation: "create",
-      title: "Review image attachment",
-      description: "Inspect image for staff follow-up.",
-      priority: "normal",
-      due_at: null,
-    });
+    assert.equal(result.success, false);
+    assert.equal(result.tool_results.length, 0);
+    assert.match(result.error ?? "", /pi_chatgpt_auth_required_for_agent_llm/);
   } finally {
     if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousApiKey;

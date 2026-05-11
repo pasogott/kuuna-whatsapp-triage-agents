@@ -198,16 +198,17 @@ PI_AUTH_HOST_PATH=$HOME/.pi/agent/auth.json
 PI_AUTH_CONTAINER_PATH=/runtime-data/pi-auth.json
 ```
 
-Pi ChatGPT auth is only used for the agent LLM session. Keep `OPENAI_API_KEY`
-configured when you want real embeddings for Knowledge indexing and retrieval
-queries, or when runtime `media_analyze` should use the configured vision and
-audio transcription models. If the key is empty, embeddings fall back to local
-pseudo-embeddings and media analysis is skipped with `openai_api_key_missing`.
+This setup is intentionally split:
 
-When both are configured, the runtime still uses the mounted ChatGPT login for
-Pi OpenAI models, while the API key remains available for embeddings and media
-tools. `OPENAI_API_KEY` also remains an explicit API-key override for runtime
-model calls when no Pi auth file is mounted.
+- Agent LLM calls use the mounted Pi ChatGPT login only.
+- Embeddings, retrieval query vectors, and runtime media analysis use
+  `OPENAI_API_KEY`.
+
+Do not use `OPENAI_API_KEY` as an agent LLM fallback. The runtime does not
+register it as an agent model credential, does not switch agent model calls to
+API-key billing, and requires the mounted Pi auth file for agent LLM execution.
+If the key is empty, embeddings fall back to local pseudo-embeddings and media
+analysis is skipped with `openai_api_key_missing`.
 
 ### Development Start
 Run the full development stack from the repository root:

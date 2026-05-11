@@ -1,8 +1,7 @@
-import { getModel, type Api, type Model } from "@mariozechner/pi-ai";
+import { getModel, type Api, type Model } from "@earendil-works/pi-ai";
 import type { ReasoningEffort } from "@kuuna/agent-contracts";
-import { defaultModel, defaultReasoningEffort, MAX_MODEL_ATTEMPTS, openAiApiKey, openAiBaseUrl, piAuthPath } from "./config.js";
+import { defaultModel, defaultReasoningEffort, MAX_MODEL_ATTEMPTS } from "./config.js";
 
-const openAiApiProvider = "openai";
 const openAiCodexProvider = "openai-codex";
 
 function splitProviderModel(modelName: string): { provider: string | undefined; modelName: string } {
@@ -13,7 +12,7 @@ function splitProviderModel(modelName: string): { provider: string | undefined; 
       continue;
     }
     const provider = trimmed.slice(0, index);
-    if (provider === openAiApiProvider || provider === openAiCodexProvider) {
+    if (provider === "openai" || provider === openAiCodexProvider) {
       return { provider, modelName: trimmed.slice(index + 1) };
     }
   }
@@ -43,13 +42,5 @@ export function piThinkingLevel(effort: ReasoningEffort | undefined): "off" | "m
 
 export function getOpenAiModel(modelName: string): Model<Api> | undefined {
   const parsed = splitProviderModel(modelName);
-  const provider = parsed.provider ?? (openAiApiKey() || !piAuthPath() ? openAiApiProvider : openAiCodexProvider);
-  const model = getModel(provider as never, parsed.modelName as never);
-  if (!model) {
-    return undefined;
-  }
-  if (provider === openAiApiProvider) {
-    return { ...model, baseUrl: openAiBaseUrl() };
-  }
-  return model;
+  return getModel(openAiCodexProvider as never, parsed.modelName as never);
 }
