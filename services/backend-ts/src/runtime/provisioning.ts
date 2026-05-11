@@ -414,7 +414,7 @@ async function inspectRuntimeImage(
   try {
     return { image, inspect: await dockerClient.inspectImage(image) };
   } catch (error) {
-    if (!fallbackImage) {
+    if (!fallbackImage || !isMissingDockerImageError(error)) {
       throw new RuntimeProvisioningError(
         "runtime_image_inspect_failed",
         `failed to inspect runtime image ${image}: ${errorMessage(error)}`,
@@ -430,6 +430,11 @@ async function inspectRuntimeImage(
       `failed to inspect runtime image ${image}; fallback image ${fallbackImage} also failed: ${errorMessage(fallbackError)}`,
     );
   }
+}
+
+function isMissingDockerImageError(error: unknown): boolean {
+  const message = errorMessage(error);
+  return /\bHTTP 404\b/.test(message) || /\bNo such image\b/i.test(message);
 }
 
 function buildRuntimeBinds(containerName: string, settings: Settings): string[] {
