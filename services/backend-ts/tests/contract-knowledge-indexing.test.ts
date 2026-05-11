@@ -133,6 +133,68 @@ test("contract: group knowledge indexing sets provider group and replaces stale 
   assert.equal((chunk.metadataJson as Record<string, unknown>).knowledge_scope, "group");
 });
 
+test("contract: archived knowledge versions are not indexed by stale jobs", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  t.after(() => harness.close());
+
+  const [doc] = await harness.db
+    .insert(knowledgeCommonDocs)
+    .values({ docKey: "archived-common", title: "Archived Common" })
+    .returning();
+  assert.ok(doc);
+  const [version] = await harness.db
+    .insert(knowledgeVersions)
+    .values({
+      scope: "common",
+      docRefId: doc.id,
+      versionNo: 1,
+      status: "archived",
+      contentMarkdown: "This note has been replaced.",
+    })
+    .returning();
+  assert.ok(version);
+
+  await harness.db.insert(embeddings).values({
+    scope: "common",
+    sourceVersionId: version.id,
+    chunkNo: 1,
+    content: "stale archived note",
+    tokenCount: 3,
+    embedding: "[0]",
+  });
+  await harness.db.insert(retrievalChunks).values({
+    scope: "common",
+    sourceType: "knowledge_version",
+    sourceId: version.id,
+    chunkNo: 1,
+    content: "stale archived note",
+    tokenCount: 3,
+    embedding: "[0]",
+    metadataJson: {},
+  });
+
+  const result = await processKnowledgeIndexingJob(harness.db, {
+    knowledgeVersionId: version.id,
+  });
+
+  assert.deepEqual(result, { indexed: false, chunkCount: 0 });
+  const storedEmbeddings = await harness.db
+    .select()
+    .from(embeddings)
+    .where(eq(embeddings.sourceVersionId, version.id));
+  assert.equal(storedEmbeddings.length, 0);
+  const storedChunks = await harness.db
+    .select()
+    .from(retrievalChunks)
+    .where(eq(retrievalChunks.sourceId, version.id));
+  assert.equal(storedChunks.length, 0);
+  const [storedVersion] = await harness.db
+    .select()
+    .from(knowledgeVersions)
+    .where(eq(knowledgeVersions.id, version.id));
+  assert.equal(storedVersion?.status, "archived");
+});
+
 test("contract: customer knowledge indexing stays isolated to the customer group key", { skip: skipReason }, async (t) => {
   const harness = await createContractHarness();
   t.after(() => harness.close());

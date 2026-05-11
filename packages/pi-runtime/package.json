@@ -33,10 +33,10 @@
     "test": "node --conditions=development --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "0.74.0",
+    "@earendil-works/pi-ai": "0.74.0",
+    "@earendil-works/pi-coding-agent": "0.74.0",
     "@kuuna/agent-contracts": "workspace:*",
-    "@mariozechner/pi-agent-core": "0.73.1",
-    "@mariozechner/pi-ai": "0.73.1",
-    "@mariozechner/pi-coding-agent": "0.73.1",
     "typebox": "^1.0.55"
   },
   "devDependencies": {

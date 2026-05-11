@@ -3,7 +3,7 @@ import {
   DEFAULT_REASONING_EFFORT,
   type ReasoningEffort,
 } from "@kuuna/agent-contracts";
-import type { Transport } from "@mariozechner/pi-ai";
+import type { Transport } from "@earendil-works/pi-ai";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const MAX_MODEL_ATTEMPTS = 2;
@@ -39,10 +39,6 @@ export function piTransport(): Transport {
 export function openAiTimeoutMs(): number {
   const parsed = Number(openAiTimeoutSeconds());
   return Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : 30_000;
-}
-
-export function openAiVisionModel(): string {
-  return process.env.OPENAI_VISION_MODEL?.trim() || "gpt-4.1-mini";
 }
 
 export function openAiAudioTranscriptionModel(): string {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 
-import { retrievalChunks } from "../src/db/schema.js";
+import { clientProfiles, retrievalChunks } from "../src/db/schema.js";
 import { retrieveScopedRuntimeContext } from "../src/jobs/retrieval.js";
 import { contractDatabaseUrl, createContractHarness } from "./contract-harness.js";
 
@@ -53,6 +53,7 @@ test("contract: scoped retrieval does not leak chunks from another group", { ski
   t.after(() => harness.close());
   const groupA = `scope-a-${randomUUID()}@g.us`;
   const groupB = `scope-b-${randomUUID()}@g.us`;
+  const clientA = randomUUID();
   await seedChunk(harness, {
     scope: "group",
     providerGroupId: groupA,
@@ -78,8 +79,8 @@ test("contract: scoped retrieval does not leak chunks from another group", { ski
       agentInstanceId: randomUUID(),
       senderProviderUserId: "lawyer@s.whatsapp.net",
       senderRole: "lawyer",
-      primaryClientProfileId: "client-a",
-      authorizedPersonalProfileIds: ["client-a"],
+      primaryClientProfileId: clientA,
+      authorizedPersonalProfileIds: [clientA],
     },
   });
 
@@ -92,19 +93,26 @@ test("contract: scoped retrieval does not leak personal chunks for another clien
   const harness = await createContractHarness();
   t.after(() => harness.close());
   const groupA = `scope-a-${randomUUID()}@g.us`;
+  const [profile] = await harness.db
+    .insert(clientProfiles)
+    .values({ displayName: "Alex Client" })
+    .returning();
+  assert.ok(profile);
+  const clientA = profile.id;
+  const clientB = randomUUID();
   await seedChunk(harness, {
     scope: "personal",
     providerGroupId: groupA,
     sourceType: "knowledge_version",
     content: "Client A personal court date.",
-    metadataJson: { doc_key: "profile", client_profile_id: "client-a" },
+    metadataJson: { doc_key: "profile", client_profile_id: clientA },
   });
   await seedChunk(harness, {
     scope: "personal",
     providerGroupId: groupA,
     sourceType: "knowledge_version",
     content: "Client B personal court date.",
-    metadataJson: { doc_key: "profile", client_profile_id: "client-b" },
+    metadataJson: { doc_key: "profile", client_profile_id: clientB },
   });
 
   const result = await retrieveScopedRuntimeContext(harness.db, {
@@ -117,8 +125,8 @@ test("contract: scoped retrieval does not leak personal chunks for another clien
       agentInstanceId: randomUUID(),
       senderProviderUserId: "staff@s.whatsapp.net",
       senderRole: "company_staff",
-      primaryClientProfileId: "client-a",
-      authorizedPersonalProfileIds: ["client-a"],
+      primaryClientProfileId: clientA,
+      authorizedPersonalProfileIds: [clientA],
     },
   });
 
@@ -130,6 +138,12 @@ test("contract: scoped retrieval enforces template doc-key filters before rankin
   const harness = await createContractHarness();
   t.after(() => harness.close());
   const groupA = `scope-a-${randomUUID()}@g.us`;
+  const [profile] = await harness.db
+    .insert(clientProfiles)
+    .values({ displayName: "Alex Client" })
+    .returning();
+  assert.ok(profile);
+  const clientA = profile.id;
   await seedChunk(harness, {
     scope: "common",
     providerGroupId: null,
@@ -175,8 +189,8 @@ test("contract: scoped retrieval enforces template doc-key filters before rankin
       agentInstanceId: randomUUID(),
       senderProviderUserId: "client@s.whatsapp.net",
       senderRole: "client",
-      primaryClientProfileId: "client-a",
-      authorizedPersonalProfileIds: ["client-a"],
+      primaryClientProfileId: clientA,
+      authorizedPersonalProfileIds: [clientA],
     },
   });
 
@@ -186,11 +200,64 @@ test("contract: scoped retrieval enforces template doc-key filters before rankin
   );
 });
 
+test("contract: private knowledge versions are not dropped by the vector prelimit", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  t.after(() => harness.close());
+  const groupA = `scope-a-${randomUUID()}@g.us`;
+  const [profile] = await harness.db
+    .insert(clientProfiles)
+    .values({ displayName: "Alex Client" })
+    .returning();
+  assert.ok(profile);
+  const clientA = profile.id;
+  await seedChunk(harness, {
+    scope: "personal",
+    providerGroupId: null,
+    clientProfileId: clientA,
+    sourceType: "knowledge_version",
+    content: "Client profile note: is 24 years old.",
+    metadataJson: { doc_key: "person-note", client_profile_id: clientA },
+  });
+  for (let index = 0; index < 30; index += 1) {
+    await seedChunk(harness, {
+      scope: "common",
+      providerGroupId: null,
+      sourceType: "knowledge_version",
+      content: `Generic common filler ${index}.`,
+      metadataJson: { doc_key: "common" },
+    });
+  }
+
+  const result = await retrieveScopedRuntimeContext(harness.db, {
+    query: "what do you know about me",
+    limit: 8,
+    toolsConfig: {
+      knowledge: {
+        common_doc_keys: ["common"],
+        group_doc_keys: ["person-note"],
+        include_group_knowledge: true,
+      },
+    },
+    access: {
+      providerGroupId: groupA,
+      bindingId: randomUUID(),
+      agentInstanceId: randomUUID(),
+      senderProviderUserId: "client@s.whatsapp.net",
+      senderRole: "client",
+      primaryClientProfileId: clientA,
+      authorizedPersonalProfileIds: [clientA],
+    },
+  });
+
+  assert.ok(result.hits.some((hit) => hit.content === "Client profile note: is 24 years old."));
+});
+
 async function seedChunk(
   harness: Awaited<ReturnType<typeof createContractHarness>>,
   input: {
     scope: string;
     providerGroupId: string | null;
+    clientProfileId?: string | null;
     sourceType: string;
     content: string;
     metadataJson?: Record<string, unknown>;
@@ -199,6 +266,7 @@ async function seedChunk(
   const [chunk] = await harness.db.insert(retrievalChunks).values({
     scope: input.scope,
     providerGroupId: input.providerGroupId,
+    clientProfileId: input.clientProfileId ?? null,
     sourceType: input.sourceType,
     sourceId: randomUUID(),
     chunkNo: 1,
@@ -210,4 +278,3 @@ async function seedChunk(
   assert.ok(chunk);
   return chunk;
 }
-

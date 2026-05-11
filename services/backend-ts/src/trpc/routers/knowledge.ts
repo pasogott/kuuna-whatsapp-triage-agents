@@ -1,11 +1,15 @@
+import { createHash } from "node:crypto";
+
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import {
   clientProfiles,
+  embeddings,
   groupBindings,
   groupClientProfiles,
+  groupMembers,
   knowledgeCommonDocs,
   knowledgeCustomerDocs,
   knowledgeClaims,
@@ -16,6 +20,7 @@ import {
   mediaAssets,
   messages,
   messageVersions,
+  retrievalChunks,
   templateVersions,
   transcripts,
 } from "../../db/schema.js";
@@ -39,6 +44,14 @@ const customerDocInput = groupDocInput.extend({
 
 const personalDocInput = commonDocInput.extend({
   clientProfileId: z.string().uuid(),
+});
+
+const personNoteInput = z.object({
+  providerGroupId: z.string().trim().min(1).max(255),
+  providerUserId: z.string().trim().min(1).max(255),
+  contentMarkdown: z.string().min(1).refine((value) => value.trim().length > 0, {
+    message: "Markdown cannot be empty",
+  }),
 });
 
 const versionInput = z.object({
@@ -303,12 +316,12 @@ export const knowledgeRouter = createTRPCRouter({
   }),
 
   groupDocs: protectedProcedure
-    .input(z.object({ providerGroupId: z.string() }))
+    .input(z.object({ providerGroupId: z.string().optional() }).default({}))
     .query(async ({ ctx, input }) => {
       const rows = await ctx.db
         .select()
         .from(knowledgeGroupDocs)
-        .where(eq(knowledgeGroupDocs.providerGroupId, input.providerGroupId))
+        .where(input.providerGroupId ? eq(knowledgeGroupDocs.providerGroupId, input.providerGroupId) : undefined)
         .orderBy(desc(knowledgeGroupDocs.updatedAt));
       return rows.map((doc) => ({
         id: doc.id,
@@ -340,6 +353,105 @@ export const knowledgeRouter = createTRPCRouter({
       .values({ providerGroupId: input.providerGroupId, docKey: input.docKey, title: input.title })
       .returning();
     return doc;
+  }),
+
+  upsertPersonNote: roleProcedure("owner", "admin").input(personNoteInput).mutation(async ({ ctx, input }) => {
+    const [member] = await ctx.db
+      .select()
+      .from(groupMembers)
+      .where(
+        and(
+          eq(groupMembers.providerGroupId, input.providerGroupId),
+          eq(groupMembers.providerUserId, input.providerUserId),
+        ),
+      )
+      .limit(1);
+    if (!member) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "group member not found" });
+    }
+
+    if (member.role !== "client" || !member.clientProfileId) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "person note requires a client member linked to a client profile",
+      });
+    }
+
+    const clientProfileId = member.clientProfileId;
+    const docKey = personNoteDocKey();
+    const legacyDocKey = legacyPersonNoteDocKey(input.providerUserId);
+    const title = `Personal note: ${personNoteDisplayName(member)}`;
+    const now = new Date();
+    const result = await ctx.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(knowledgePersonalDocs)
+        .where(
+          and(
+            eq(knowledgePersonalDocs.clientProfileId, clientProfileId),
+            eq(knowledgePersonalDocs.docKey, docKey),
+          ),
+        )
+        .limit(1);
+
+      const doc = existing
+        ? (await tx
+            .update(knowledgePersonalDocs)
+            .set({ title, updatedAt: now })
+            .where(eq(knowledgePersonalDocs.id, existing.id))
+            .returning())[0]
+        : (await tx
+            .insert(knowledgePersonalDocs)
+            .values({
+              clientProfileId,
+              docKey,
+              title,
+            })
+            .returning())[0];
+      if (!doc) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "person note document write failed" });
+      }
+
+      const [latest] = await tx
+        .select({ value: sql<number>`coalesce(max(${knowledgeVersions.versionNo}), 0)` })
+        .from(knowledgeVersions)
+        .where(and(eq(knowledgeVersions.scope, "personal"), eq(knowledgeVersions.docRefId, doc.id)));
+      await archiveActiveKnowledgeVersions(tx, {
+        scope: "personal",
+        docRefId: doc.id,
+        now,
+      });
+      await deleteLegacyGroupPersonNote(tx, {
+        providerGroupId: input.providerGroupId,
+        docKey: legacyDocKey,
+      });
+      const [version] = await tx
+        .insert(knowledgeVersions)
+        .values({
+          scope: "personal",
+          docRefId: doc.id,
+          versionNo: Number(latest?.value ?? 0) + 1,
+          status: "published",
+          contentMarkdown: input.contentMarkdown,
+        })
+        .returning();
+      if (!version) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "person note version write failed" });
+      }
+      return { doc, version };
+    });
+
+    await enqueueKuunaJob(
+      "knowledge_indexing",
+      { knowledge_version_id: result.version.id },
+      `knowledge_indexing_${jobToken(result.version.id)}`,
+    );
+    return {
+      doc_id: result.doc.id,
+      doc_key: result.doc.docKey,
+      version_id: result.version.id,
+      version_no: result.version.versionNo,
+    };
   }),
 
   customerDocs: protectedProcedure
@@ -849,6 +961,102 @@ function knowledgeDocKeyAllowed(allowed: KnowledgeFilter["commonDocKeys"], docKe
   if (allowed === "*") return true;
   if (allowed === "none") return false;
   return Boolean(docKey && allowed.includes(docKey.trim().toLowerCase()));
+}
+
+type KnowledgeScope = "common" | "group" | "customer" | "personal";
+
+async function archiveActiveKnowledgeVersions(
+  database: DbLike,
+  input: { scope: KnowledgeScope; docRefId: string; now: Date },
+): Promise<void> {
+  const superseded = await database
+    .select({ id: knowledgeVersions.id })
+    .from(knowledgeVersions)
+    .where(
+      and(
+        eq(knowledgeVersions.scope, input.scope),
+        eq(knowledgeVersions.docRefId, input.docRefId),
+        inArray(knowledgeVersions.status, ["published", "ready"]),
+      ),
+    );
+  const supersededVersionIds = superseded.map((version) => version.id);
+  if (!supersededVersionIds.length) {
+    return;
+  }
+  await database
+    .update(knowledgeVersions)
+    .set({ status: "archived", updatedAt: input.now })
+    .where(inArray(knowledgeVersions.id, supersededVersionIds));
+  await deleteKnowledgeVersionIndexRows(database, supersededVersionIds);
+}
+
+async function deleteLegacyGroupPersonNote(
+  database: DbLike,
+  input: { providerGroupId: string; docKey: string },
+): Promise<void> {
+  const [legacyDoc] = await database
+    .select({ id: knowledgeGroupDocs.id })
+    .from(knowledgeGroupDocs)
+    .where(
+      and(
+        eq(knowledgeGroupDocs.providerGroupId, input.providerGroupId),
+        eq(knowledgeGroupDocs.docKey, input.docKey),
+      ),
+    )
+    .limit(1);
+  if (!legacyDoc) {
+    return;
+  }
+  const legacyVersions = await database
+    .select({ id: knowledgeVersions.id })
+    .from(knowledgeVersions)
+    .where(and(eq(knowledgeVersions.scope, "group"), eq(knowledgeVersions.docRefId, legacyDoc.id)));
+  const legacyVersionIds = legacyVersions.map((version) => version.id);
+  await deleteKnowledgeVersionIndexRows(database, legacyVersionIds);
+  if (legacyVersionIds.length) {
+    await database
+      .delete(knowledgeVersions)
+      .where(inArray(knowledgeVersions.id, legacyVersionIds));
+  }
+  await database
+    .delete(knowledgeGroupDocs)
+    .where(eq(knowledgeGroupDocs.id, legacyDoc.id));
+}
+
+async function deleteKnowledgeVersionIndexRows(database: DbLike, versionIds: string[]): Promise<void> {
+  if (!versionIds.length) {
+    return;
+  }
+  await database
+    .delete(embeddings)
+    .where(inArray(embeddings.sourceVersionId, versionIds));
+  await database
+    .delete(retrievalChunks)
+    .where(
+      and(
+        eq(retrievalChunks.sourceType, "knowledge_version"),
+        inArray(retrievalChunks.sourceId, versionIds),
+      ),
+    );
+}
+
+function personNoteDocKey(): string {
+  return "person-note";
+}
+
+function legacyPersonNoteDocKey(providerUserId: string): string {
+  const digest = createHash("sha256").update(providerUserId).digest("hex").slice(0, 16);
+  return `person-note-${digest}`;
+}
+
+function personNoteDisplayName(member: typeof groupMembers.$inferSelect): string {
+  return (
+    member.displayName?.trim() ||
+    member.pushName?.trim() ||
+    member.phoneOverride?.trim() ||
+    member.derivedPhone?.trim() ||
+    member.providerUserId
+  );
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {

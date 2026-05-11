@@ -43,6 +43,11 @@ export type RetrievalAccessContext = {
   authorizedPersonalProfileIds?: string[];
 };
 
+type RetrievalCandidateRow = {
+  chunk: typeof retrievalChunks.$inferSelect;
+  vectorDistance: number;
+};
+
 export type KnowledgeFilter = {
   commonDocKeys: "*" | "none" | string[];
   groupDocKeys: "*" | "none" | string[];
@@ -68,21 +73,37 @@ export async function retrieveScopedRuntimeContext(
     fallbackLogMessage: "retrieval_query_embedding_openai_not_configured_using_pseudo_embedding",
   }))[0] ?? [];
   const queryVector = vectorLiteral(queryEmbedding);
+  const vectorDistance = sql<number>`coalesce(${retrievalChunks.embeddingVector} <=> ${queryVector}::vector, 1)`;
+  const sourceTypes = normalizeUniqueStrings(input.sourceTypes ?? []);
   const whereClause = withSourceTypeFilter(
     input.allowBoundConversationScope
       ? eq(retrievalChunks.providerGroupId, input.access.providerGroupId)
       : authorizedWhereClause(input.access, access),
-    input.sourceTypes,
+    sourceTypes,
   );
-  const rows = await database
+  const vectorRows = await database
     .select({
       chunk: retrievalChunks,
-      vectorDistance: sql<number>`coalesce(${retrievalChunks.embeddingVector} <=> ${queryVector}::vector, 1)`,
+      vectorDistance,
     })
     .from(retrievalChunks)
     .where(whereClause)
-    .orderBy(sql`coalesce(${retrievalChunks.embeddingVector} <=> ${queryVector}::vector, 1)`, desc(retrievalChunks.updatedAt))
+    .orderBy(vectorDistance, desc(retrievalChunks.updatedAt))
     .limit(rowLimit);
+  const privateKnowledgeRows = shouldSupplementPrivateKnowledge(input, access, sourceTypes)
+    ? await database
+      .select({
+        chunk: retrievalChunks,
+        vectorDistance,
+      })
+      .from(retrievalChunks)
+      .where(privateKnowledgeVersionWhereClause(input.access, access))
+      .orderBy(desc(retrievalChunks.updatedAt))
+      .limit(Math.max(input.limit * 4, 24))
+    : [];
+  const rows = privateKnowledgeRows.length
+    ? dedupeCandidateRows([...vectorRows, ...privateKnowledgeRows])
+    : vectorRows;
 
   const hits = rows
     .filter(({ chunk }) =>
@@ -129,6 +150,39 @@ function withSourceTypeFilter(whereClause: ReturnType<typeof authorizedWhereClau
   const normalized = normalizeUniqueStrings(sourceTypes ?? []);
   if (!normalized.length) return whereClause;
   return and(whereClause, inArray(retrievalChunks.sourceType, normalized));
+}
+
+function shouldSupplementPrivateKnowledge(
+  input: { sourceTypes?: string[]; allowBoundConversationScope?: boolean },
+  access: ReturnType<typeof evaluateAccess>,
+  sourceTypes: string[],
+): boolean {
+  if (input.allowBoundConversationScope || !access.privateScopesAllowed) {
+    return false;
+  }
+  return sourceTypes.length === 0 || sourceTypes.includes("knowledge_version");
+}
+
+function privateKnowledgeVersionWhereClause(
+  requested: RetrievalAccessContext,
+  access: ReturnType<typeof evaluateAccess>,
+) {
+  const clauses = [eq(retrievalChunks.providerGroupId, requested.providerGroupId)];
+  if (access.authorizedPersonalProfileIds.length > 0) {
+    clauses.push(inArray(retrievalChunks.clientProfileId, access.authorizedPersonalProfileIds));
+  }
+  return and(eq(retrievalChunks.sourceType, "knowledge_version"), or(...clauses));
+}
+
+function dedupeCandidateRows(rows: RetrievalCandidateRow[]): RetrievalCandidateRow[] {
+  const seen = new Set<string>();
+  return rows.filter(({ chunk }) => {
+    if (seen.has(chunk.id)) {
+      return false;
+    }
+    seen.add(chunk.id);
+    return true;
+  });
 }
 
 function authorizedWhereClause(
