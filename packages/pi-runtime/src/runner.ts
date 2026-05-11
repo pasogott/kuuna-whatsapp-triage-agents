@@ -215,7 +215,7 @@ export async function runAgent(input: unknown): Promise<RuntimeAgentResult> {
 
   for (const modelName of selectedModelPath) {
     try {
-      if (!openAiApiKey()) {
+      if (!openAiApiKey() && !piAuthPath()) {
         responseText = placeholderResponse(modelName || defaultModel(), enrichedRequest);
         modelToolResults = [];
       } else {

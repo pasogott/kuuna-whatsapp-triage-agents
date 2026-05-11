@@ -194,7 +194,7 @@ Then mount the generated Pi auth file into managed runtime containers from
 ```bash
 OPENAI_API_KEY=
 PI_TRANSPORT=websocket-cached
-PI_AUTH_HOST_PATH=/Users/flybyflo/.pi/agent/auth.json
+PI_AUTH_HOST_PATH=$HOME/.pi/agent/auth.json
 PI_AUTH_CONTAINER_PATH=/runtime-data/pi-auth.json
 ```
 
