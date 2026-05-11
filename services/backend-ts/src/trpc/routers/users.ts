@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { and, count, eq, inArray, ne } from "drizzle-orm";
 import { hashPassword } from "better-auth/crypto";
 import { z } from "zod";
 
@@ -13,7 +13,7 @@ const roleInput = z.enum(["owner", "admin", "operator", "viewer"]);
 
 const userCreateInput = z.object({
   email: z.string().trim().email().max(320),
-  password: z.string().min(8).max(255),
+  password: z.string().min(getSettings().AUTH_PASSWORD_MIN_LENGTH).max(255),
   roles: z.array(roleInput).default(["viewer"]),
   groupScope: z.array(z.string().trim().min(1).max(255)).default([]),
   mustChangePassword: z.boolean().default(true),
@@ -53,8 +53,15 @@ function isPrivilegedRole(roleName: string): boolean {
 }
 
 async function activePrivilegedUserCount(database: DbLike, excludeUserId?: string): Promise<number> {
-  const rows = await database.select({ id: users.id, role: users.role, banned: users.banned }).from(users);
-  return rows.filter((row) => row.id !== excludeUserId && !row.banned && isPrivilegedRole(row.role)).length;
+  const [row] = await database
+    .select({ value: count() })
+    .from(users)
+    .where(and(
+      inArray(users.role, ["owner", "admin"]),
+      eq(users.banned, false),
+      excludeUserId ? ne(users.id, excludeUserId) : undefined,
+    ));
+  return row?.value ?? 0;
 }
 
 async function assertCanRemoveActiveAccess(

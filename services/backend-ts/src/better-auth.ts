@@ -6,67 +6,10 @@ import { hashPassword, verifyPassword } from "better-auth/crypto";
 import { scryptSync, timingSafeEqual } from "node:crypto";
 
 import { getSettings } from "./config.js";
-import { db } from "./db/client.js";
+import { db, type Database } from "./db/client.js";
 import * as schema from "./db/schema.js";
 
-const settings = getSettings();
-
-const configuredAuth = betterAuth({
-  appName: "Kuuna Support Agents",
-  baseURL: settings.BETTER_AUTH_URL,
-  basePath: "/api/auth",
-  secret: settings.BETTER_AUTH_SECRET,
-  trustedOrigins: [settings.DASHBOARD_ORIGIN, settings.BETTER_AUTH_URL],
-  database: drizzleAdapter(db, {
-    provider: "pg",
-    schema,
-    transaction: true,
-  }),
-  emailAndPassword: {
-    enabled: true,
-    disableSignUp: true,
-    minPasswordLength: settings.AUTH_PASSWORD_MIN_LENGTH,
-    maxPasswordLength: 255,
-    password: {
-      hash: hashPassword,
-      verify: verifyCompatiblePassword,
-    },
-  },
-  user: {
-    additionalFields: {
-      mustChangePassword: {
-        type: "boolean",
-        fieldName: "must_change_password",
-        defaultValue: true,
-        required: true,
-      },
-    },
-  },
-  session: {
-    expiresIn: settings.AUTH_TOKEN_TTL_SECONDS,
-    updateAge: Math.min(60 * 60, settings.AUTH_TOKEN_TTL_SECONDS),
-  },
-  advanced: {
-    database: {
-      generateId: "uuid",
-    },
-    cookiePrefix: "kuuna",
-  },
-  plugins: [
-    admin({
-      defaultRole: "viewer",
-      adminRoles: ["owner", "admin"],
-      ac: defaultAc as never,
-      roles: {
-        owner: adminAc,
-        admin: adminAc,
-      },
-      bannedUserMessage: "This account is inactive. Ask an admin to reactivate it.",
-    }),
-  ],
-});
-
-export const auth = configuredAuth as {
+export type BetterAuthInstance = {
   api: {
     getSession(input: { headers: Headers }): Promise<{
       user: { id: string };
@@ -80,6 +23,66 @@ export const auth = configuredAuth as {
   handler(request: Request): Promise<Response>;
   $Infer: unknown;
 };
+
+export function createBetterAuth(database: Database = db): BetterAuthInstance {
+  const settings = getSettings();
+  return betterAuth({
+    appName: "Kuuna Support Agents",
+    baseURL: settings.BETTER_AUTH_URL,
+    basePath: "/api/auth",
+    secret: settings.BETTER_AUTH_SECRET,
+    trustedOrigins: [settings.DASHBOARD_ORIGIN, settings.BETTER_AUTH_URL],
+    database: drizzleAdapter(database, {
+      provider: "pg",
+      schema,
+      transaction: true,
+    }),
+    emailAndPassword: {
+      enabled: true,
+      disableSignUp: true,
+      minPasswordLength: settings.AUTH_PASSWORD_MIN_LENGTH,
+      maxPasswordLength: 255,
+      password: {
+        hash: hashPassword,
+        verify: verifyCompatiblePassword,
+      },
+    },
+    user: {
+      additionalFields: {
+        mustChangePassword: {
+          type: "boolean",
+          fieldName: "must_change_password",
+          defaultValue: true,
+          required: true,
+        },
+      },
+    },
+    session: {
+      expiresIn: settings.AUTH_TOKEN_TTL_SECONDS,
+      updateAge: Math.min(60 * 60, settings.AUTH_TOKEN_TTL_SECONDS),
+    },
+    advanced: {
+      database: {
+        generateId: "uuid",
+      },
+      cookiePrefix: "kuuna",
+    },
+    plugins: [
+      admin({
+        defaultRole: "viewer",
+        adminRoles: ["owner", "admin"],
+        ac: defaultAc as never,
+        roles: {
+          owner: adminAc,
+          admin: adminAc,
+        },
+        bannedUserMessage: "This account is inactive. Ask an admin to reactivate it.",
+      }),
+    ],
+  }) as BetterAuthInstance;
+}
+
+export const auth = createBetterAuth();
 
 export type BetterAuthSession = unknown;
 

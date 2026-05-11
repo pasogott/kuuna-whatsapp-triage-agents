@@ -5,7 +5,7 @@ import { ZodError } from "zod";
 import { fromNodeHeaders } from "better-auth/node";
 
 import { ensureRequiredAdmin } from "./auth/bootstrap.js";
-import { auth } from "./better-auth.js";
+import { createBetterAuth } from "./better-auth.js";
 import { getSettings } from "./config.js";
 import { closeDb, db, type Database } from "./db/client.js";
 import { closeQueues, enqueueKuunaJob, type EnqueueKuunaJob } from "./jobs/queues.js";
@@ -37,6 +37,8 @@ export type BuildServerOptions = {
 export async function buildServer(options: BuildServerOptions = {}) {
   initSentry();
   const settings = getSettings();
+  const database = options.db ?? db;
+  const auth = createBetterAuth(database);
 
   const app = fastify({
     logger: false,
@@ -76,7 +78,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
     async handler(request, reply) {
       const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
       if (request.method === "POST" && url.pathname === "/api/auth/sign-in/email") {
-        await ensureRequiredAdmin(options.db ?? db);
+        await ensureRequiredAdmin(database);
       }
       const body =
         request.method === "GET" || request.method === "HEAD" || request.body === undefined
@@ -114,7 +116,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
       return reply.code(403).send({ detail: "invalid runtime tool token" });
     }
     try {
-      return await searchRuntimeTool(options.db ?? db, request.body);
+      return await searchRuntimeTool(database, request.body);
     } catch (error) {
       if (error instanceof RuntimeToolSearchError) {
         return reply.code(error.statusCode).send({ detail: error.message });
@@ -138,7 +140,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
             String(req.headers["x-real-ip"] ?? "") ||
             req.socket.remoteAddress ||
             "unknown",
-          db: options.db,
+          db: database,
           enqueueJob: options.enqueueJob ?? enqueueKuunaJob,
         }),
     },

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { hashPassword } from "better-auth/crypto";
 
 import { getSettings } from "../config.js";
@@ -55,7 +55,7 @@ export async function ensureRequiredAdmin(database: Database): Promise<void> {
   const [existingAccount] = await database
     .select({ id: account.id })
     .from(account)
-    .where(eq(account.userId, existing.id))
+    .where(and(eq(account.userId, existing.id), eq(account.providerId, "credential"), eq(account.accountId, existing.id)))
     .limit(1);
   if (!existingAccount || resetPassword) {
     const password = await hashPassword(settings.DASHBOARD_REQUIRED_ADMIN_PASSWORD);

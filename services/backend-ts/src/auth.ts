@@ -34,13 +34,28 @@ export function requireRole(authContext: AuthContext, allowedRoles: RoleName[]):
 }
 
 export function passwordPolicyViolations(password: string): string[] {
+  const settings = getSettings();
   const violations: string[] = [];
-  if (password.length < 12) violations.push("minimum length is 12");
+  if (password.length < settings.AUTH_PASSWORD_MIN_LENGTH) {
+    violations.push(`minimum length is ${settings.AUTH_PASSWORD_MIN_LENGTH}`);
+  }
   if (password.toLowerCase() === password) violations.push("must include an uppercase letter");
   if (password.toUpperCase() === password) violations.push("must include a lowercase letter");
   if (![...password].some((char) => /\d/.test(char))) violations.push("must include a digit");
   if (![...password].some((char) => !/[A-Za-z0-9]/.test(char))) {
     violations.push("must include a symbol");
+  }
+  let runLength = 1;
+  for (let index = 1; index < password.length; index += 1) {
+    if (password[index] === password[index - 1]) {
+      runLength += 1;
+      if (runLength > settings.AUTH_PASSWORD_MAX_CONSECUTIVE) {
+        violations.push(`must not repeat the same character more than ${settings.AUTH_PASSWORD_MAX_CONSECUTIVE} times`);
+        break;
+      }
+    } else {
+      runLength = 1;
+    }
   }
   return violations;
 }
@@ -78,29 +93,33 @@ export function decodeAccessToken(token: string): {
   groupScope: string[];
   expiresAt: Date;
 } | null {
-  const [body, signature] = token.split(".");
-  if (!body || !signature) return null;
-  const expected = createHmac("sha256", getSettings().BETTER_AUTH_SECRET).update(body).digest("base64url");
-  if (!constantTimeEqual(signature, expected)) return null;
-  const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as {
-    sub?: unknown;
-    role?: unknown;
-    group_scope?: unknown;
-    exp?: unknown;
-  };
-  if (typeof parsed.sub !== "string" || !isRoleName(parsed.role) || typeof parsed.exp !== "number") {
+  try {
+    const [body, signature] = token.split(".");
+    if (!body || !signature) return null;
+    const expected = createHmac("sha256", getSettings().BETTER_AUTH_SECRET).update(body).digest("base64url");
+    if (!constantTimeEqual(signature, expected)) return null;
+    const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as {
+      sub?: unknown;
+      role?: unknown;
+      group_scope?: unknown;
+      exp?: unknown;
+    };
+    if (typeof parsed.sub !== "string" || !isRoleName(parsed.role) || typeof parsed.exp !== "number") {
+      return null;
+    }
+    const expiresAt = new Date(parsed.exp * 1000);
+    if (expiresAt.getTime() <= Date.now()) return null;
+    return {
+      userId: parsed.sub,
+      role: parsed.role,
+      groupScope: Array.isArray(parsed.group_scope)
+        ? parsed.group_scope.filter((value): value is string => typeof value === "string")
+        : [],
+      expiresAt,
+    };
+  } catch {
     return null;
   }
-  const expiresAt = new Date(parsed.exp * 1000);
-  if (expiresAt.getTime() <= Date.now()) return null;
-  return {
-    userId: parsed.sub,
-    role: parsed.role,
-    groupScope: Array.isArray(parsed.group_scope)
-      ? parsed.group_scope.filter((value): value is string => typeof value === "string")
-      : [],
-    expiresAt,
-  };
 }
 
 function constantTimeEqual(left: string, right: string): boolean {

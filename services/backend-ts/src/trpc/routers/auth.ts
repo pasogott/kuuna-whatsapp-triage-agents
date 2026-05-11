@@ -8,12 +8,13 @@ import {
   resolveScopeForUser,
 } from "../../auth.js";
 import { auth } from "../../better-auth.js";
+import { getSettings } from "../../config.js";
 import { users } from "../../db/schema.js";
 import { createTRPCRouter, sessionProcedure } from "../init.js";
 
 const changePasswordInput = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(8).max(255),
+  newPassword: z.string().min(getSettings().AUTH_PASSWORD_MIN_LENGTH).max(255),
 });
 
 export const authRouter = createTRPCRouter({

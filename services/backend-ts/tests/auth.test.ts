@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { passwordPolicyViolations } from "../src/auth.js";
+import { decodeAccessToken, passwordPolicyViolations } from "../src/auth.js";
 import { getSettings, resetSettingsForTests } from "../src/config.js";
 
 test("production settings reject default better auth secret", (t) => {
@@ -44,4 +44,8 @@ test("password policy reports domain violations", () => {
   assert.ok(violations.includes("must include an uppercase letter"));
   assert.ok(violations.includes("must include a digit"));
   assert.ok(violations.includes("must include a symbol"));
+});
+
+test("malformed access tokens decode to null", () => {
+  assert.equal(decodeAccessToken("not-json.bad-signature"), null);
 });

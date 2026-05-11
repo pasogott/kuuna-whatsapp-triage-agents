@@ -1,7 +1,9 @@
 import { isAdminRole } from "@/lib/permissions/matrix";
 import type { StaffUser } from "@/lib/api-client/types";
 
-export const REQUIRED_ADMIN_EMAIL = "admin@kuuna.ai";
+export const REQUIRED_ADMIN_EMAIL = (
+  process.env.REQUIRED_ADMIN_EMAIL ?? "admin@kuuna.ai"
+).toLowerCase();
 
 export function isRequiredAdminAccount(user: StaffUser): boolean {
   return user.email.toLowerCase() === REQUIRED_ADMIN_EMAIL;
