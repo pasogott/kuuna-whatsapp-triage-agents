@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { eq } from "drizzle-orm";
+
 import {
+  embeddings,
   groupMembers,
   knowledgeCustomerDocs,
   knowledgeGroupDocs,
@@ -9,6 +12,7 @@ import {
   mediaAssets,
   messages,
   messageVersions,
+  retrievalChunks,
   transcripts,
 } from "../src/db/schema.js";
 import { contractDatabaseUrl, createContractHarness } from "./contract-harness.js";
@@ -80,6 +84,26 @@ test("contract: person note creates and updates one group knowledge document", {
     providerUserId: "person-1@s.whatsapp.net",
     contentMarkdown: "First note about Alex.",
   });
+  await harness.db.update(knowledgeVersions).set({ status: "ready" }).where(eq(knowledgeVersions.id, first.version_id));
+  await harness.db.insert(embeddings).values({
+    scope: "group",
+    sourceVersionId: first.version_id,
+    chunkNo: 1,
+    content: "First note about Alex.",
+    tokenCount: 4,
+    embedding: "[0]",
+  });
+  await harness.db.insert(retrievalChunks).values({
+    scope: "group",
+    providerGroupId: "people-group@g.us",
+    sourceType: "knowledge_version",
+    sourceId: first.version_id,
+    chunkNo: 1,
+    content: "First note about Alex.",
+    tokenCount: 4,
+    embedding: "[0]",
+    metadataJson: {},
+  });
   const second = await caller.knowledge.upsertPersonNote({
     providerGroupId: "people-group@g.us",
     providerUserId: "person-1@s.whatsapp.net",
@@ -99,7 +123,37 @@ test("contract: person note creates and updates one group knowledge document", {
     versions.map((version) => version.status).sort(),
     ["archived", "published"],
   );
+  const staleEmbeddings = await harness.db.select().from(embeddings).where(eq(embeddings.sourceVersionId, first.version_id));
+  assert.equal(staleEmbeddings.length, 0);
+  const staleChunks = await harness.db.select().from(retrievalChunks).where(eq(retrievalChunks.sourceId, first.version_id));
+  assert.equal(staleChunks.length, 0);
   assert.equal(harness.jobs.filter((job) => job.name === "knowledge_indexing").length, 2);
+});
+
+test("contract: group docs can list manual docs across all groups", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  t.after(() => harness.close());
+  const caller = await authedCaller(harness);
+
+  await harness.db.insert(knowledgeGroupDocs).values([
+    {
+      providerGroupId: "people-group@g.us",
+      docKey: "person-note-a",
+      title: "Person note A",
+    },
+    {
+      providerGroupId: "other-group@g.us",
+      docKey: "person-note-b",
+      title: "Person note B",
+    },
+  ]);
+
+  const rows = await caller.knowledge.groupDocs({});
+
+  assert.deepEqual(
+    rows.map((row) => row.doc_key).sort(),
+    ["person-note-a", "person-note-b"],
+  );
 });
 
 test("contract: person note rejects members outside the chat", { skip: skipReason }, async (t) => {

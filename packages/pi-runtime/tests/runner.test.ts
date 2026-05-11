@@ -114,6 +114,42 @@ test("requires Pi ChatGPT auth for agent LLM calls", async () => {
   }
 });
 
+test("does not analyze media before Pi ChatGPT auth is configured", async () => {
+  const previousApiKey = process.env.OPENAI_API_KEY;
+  const previousPiAuthPath = process.env.PI_AUTH_PATH;
+  process.env.OPENAI_API_KEY = "test-key";
+  delete process.env.PI_AUTH_PATH;
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("fetch should not be called without Pi auth");
+  }) as typeof fetch;
+  try {
+    const result = await runAgent({
+      user_prompt: "Review audio",
+      context: {
+        media_attachments: [
+          {
+            media_asset_id: "audio-1",
+            mime_type: "audio/mpeg",
+            status: "ready",
+            object_url: "https://example.test/audio.mp3",
+          },
+        ],
+      },
+    });
+
+    assert.equal(result.success, false);
+    assert.deepEqual(result.media_insights, []);
+    assert.match(result.error ?? "", /pi_chatgpt_auth_required_for_agent_llm/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousApiKey;
+    if (previousPiAuthPath === undefined) delete process.env.PI_AUTH_PATH;
+    else process.env.PI_AUTH_PATH = previousPiAuthPath;
+  }
+});
+
 test("uses Pi OpenAI Codex provider even when only an API key is configured", () => {
   const previousApiKey = process.env.OPENAI_API_KEY;
   const previousPiAuthPath = process.env.PI_AUTH_PATH;

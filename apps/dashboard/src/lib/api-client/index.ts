@@ -928,9 +928,7 @@ export async function listKnowledgeDocs(
       }
       if (scope === "group") {
         const [manualDocs, ingestedDocs] = await Promise.all([
-          providerGroupId
-            ? client.knowledge.groupDocs.query({ providerGroupId })
-            : Promise.resolve([]),
+          client.knowledge.groupDocs.query({ providerGroupId }),
           client.knowledge.ingestedGroupDocs.query({ providerGroupId }),
         ]);
         return [...manualDocs, ...ingestedDocs].map(mapKnowledgeDoc);

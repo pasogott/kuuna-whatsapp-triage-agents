@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import {
   clientProfiles,
+  embeddings,
   groupBindings,
   groupClientProfiles,
   groupMembers,
@@ -19,6 +20,7 @@ import {
   mediaAssets,
   messages,
   messageVersions,
+  retrievalChunks,
   templateVersions,
   transcripts,
 } from "../../db/schema.js";
@@ -314,12 +316,12 @@ export const knowledgeRouter = createTRPCRouter({
   }),
 
   groupDocs: protectedProcedure
-    .input(z.object({ providerGroupId: z.string() }))
+    .input(z.object({ providerGroupId: z.string().optional() }).default({}))
     .query(async ({ ctx, input }) => {
       const rows = await ctx.db
         .select()
         .from(knowledgeGroupDocs)
-        .where(eq(knowledgeGroupDocs.providerGroupId, input.providerGroupId))
+        .where(input.providerGroupId ? eq(knowledgeGroupDocs.providerGroupId, input.providerGroupId) : undefined)
         .orderBy(desc(knowledgeGroupDocs.updatedAt));
       return rows.map((doc) => ({
         id: doc.id,
@@ -405,16 +407,34 @@ export const knowledgeRouter = createTRPCRouter({
         .select({ value: sql<number>`coalesce(max(${knowledgeVersions.versionNo}), 0)` })
         .from(knowledgeVersions)
         .where(and(eq(knowledgeVersions.scope, "group"), eq(knowledgeVersions.docRefId, doc.id)));
-      await tx
-        .update(knowledgeVersions)
-        .set({ status: "archived", updatedAt: now })
+      const superseded = await tx
+        .select({ id: knowledgeVersions.id })
+        .from(knowledgeVersions)
         .where(
           and(
             eq(knowledgeVersions.scope, "group"),
             eq(knowledgeVersions.docRefId, doc.id),
-            eq(knowledgeVersions.status, "published"),
+            inArray(knowledgeVersions.status, ["published", "ready"]),
           ),
         );
+      const supersededVersionIds = superseded.map((version) => version.id);
+      if (supersededVersionIds.length) {
+        await tx
+          .update(knowledgeVersions)
+          .set({ status: "archived", updatedAt: now })
+          .where(inArray(knowledgeVersions.id, supersededVersionIds));
+        await tx
+          .delete(embeddings)
+          .where(inArray(embeddings.sourceVersionId, supersededVersionIds));
+        await tx
+          .delete(retrievalChunks)
+          .where(
+            and(
+              eq(retrievalChunks.sourceType, "knowledge_version"),
+              inArray(retrievalChunks.sourceId, supersededVersionIds),
+            ),
+          );
+      }
       const [version] = await tx
         .insert(knowledgeVersions)
         .values({
