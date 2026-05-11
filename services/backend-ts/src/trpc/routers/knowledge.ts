@@ -370,31 +370,40 @@ export const knowledgeRouter = createTRPCRouter({
       throw new TRPCError({ code: "NOT_FOUND", message: "group member not found" });
     }
 
-    const docKey = personNoteDocKey(input.providerUserId);
-    const title = `Person note: ${personNoteDisplayName(member)}`;
+    if (member.role !== "client" || !member.clientProfileId) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "person note requires a client member linked to a client profile",
+      });
+    }
+
+    const clientProfileId = member.clientProfileId;
+    const docKey = personNoteDocKey();
+    const legacyDocKey = legacyPersonNoteDocKey(input.providerUserId);
+    const title = `Personal note: ${personNoteDisplayName(member)}`;
     const now = new Date();
     const result = await ctx.db.transaction(async (tx) => {
       const [existing] = await tx
         .select()
-        .from(knowledgeGroupDocs)
+        .from(knowledgePersonalDocs)
         .where(
           and(
-            eq(knowledgeGroupDocs.providerGroupId, input.providerGroupId),
-            eq(knowledgeGroupDocs.docKey, docKey),
+            eq(knowledgePersonalDocs.clientProfileId, clientProfileId),
+            eq(knowledgePersonalDocs.docKey, docKey),
           ),
         )
         .limit(1);
 
       const doc = existing
         ? (await tx
-            .update(knowledgeGroupDocs)
+            .update(knowledgePersonalDocs)
             .set({ title, updatedAt: now })
-            .where(eq(knowledgeGroupDocs.id, existing.id))
+            .where(eq(knowledgePersonalDocs.id, existing.id))
             .returning())[0]
         : (await tx
-            .insert(knowledgeGroupDocs)
+            .insert(knowledgePersonalDocs)
             .values({
-              providerGroupId: input.providerGroupId,
+              clientProfileId,
               docKey,
               title,
             })
@@ -406,39 +415,20 @@ export const knowledgeRouter = createTRPCRouter({
       const [latest] = await tx
         .select({ value: sql<number>`coalesce(max(${knowledgeVersions.versionNo}), 0)` })
         .from(knowledgeVersions)
-        .where(and(eq(knowledgeVersions.scope, "group"), eq(knowledgeVersions.docRefId, doc.id)));
-      const superseded = await tx
-        .select({ id: knowledgeVersions.id })
-        .from(knowledgeVersions)
-        .where(
-          and(
-            eq(knowledgeVersions.scope, "group"),
-            eq(knowledgeVersions.docRefId, doc.id),
-            inArray(knowledgeVersions.status, ["published", "ready"]),
-          ),
-        );
-      const supersededVersionIds = superseded.map((version) => version.id);
-      if (supersededVersionIds.length) {
-        await tx
-          .update(knowledgeVersions)
-          .set({ status: "archived", updatedAt: now })
-          .where(inArray(knowledgeVersions.id, supersededVersionIds));
-        await tx
-          .delete(embeddings)
-          .where(inArray(embeddings.sourceVersionId, supersededVersionIds));
-        await tx
-          .delete(retrievalChunks)
-          .where(
-            and(
-              eq(retrievalChunks.sourceType, "knowledge_version"),
-              inArray(retrievalChunks.sourceId, supersededVersionIds),
-            ),
-          );
-      }
+        .where(and(eq(knowledgeVersions.scope, "personal"), eq(knowledgeVersions.docRefId, doc.id)));
+      await archiveActiveKnowledgeVersions(tx, {
+        scope: "personal",
+        docRefId: doc.id,
+        now,
+      });
+      await deleteLegacyGroupPersonNote(tx, {
+        providerGroupId: input.providerGroupId,
+        docKey: legacyDocKey,
+      });
       const [version] = await tx
         .insert(knowledgeVersions)
         .values({
-          scope: "group",
+          scope: "personal",
           docRefId: doc.id,
           versionNo: Number(latest?.value ?? 0) + 1,
           status: "published",
@@ -973,7 +963,88 @@ function knowledgeDocKeyAllowed(allowed: KnowledgeFilter["commonDocKeys"], docKe
   return Boolean(docKey && allowed.includes(docKey.trim().toLowerCase()));
 }
 
-function personNoteDocKey(providerUserId: string): string {
+type KnowledgeScope = "common" | "group" | "customer" | "personal";
+
+async function archiveActiveKnowledgeVersions(
+  database: DbLike,
+  input: { scope: KnowledgeScope; docRefId: string; now: Date },
+): Promise<void> {
+  const superseded = await database
+    .select({ id: knowledgeVersions.id })
+    .from(knowledgeVersions)
+    .where(
+      and(
+        eq(knowledgeVersions.scope, input.scope),
+        eq(knowledgeVersions.docRefId, input.docRefId),
+        inArray(knowledgeVersions.status, ["published", "ready"]),
+      ),
+    );
+  const supersededVersionIds = superseded.map((version) => version.id);
+  if (!supersededVersionIds.length) {
+    return;
+  }
+  await database
+    .update(knowledgeVersions)
+    .set({ status: "archived", updatedAt: input.now })
+    .where(inArray(knowledgeVersions.id, supersededVersionIds));
+  await deleteKnowledgeVersionIndexRows(database, supersededVersionIds);
+}
+
+async function deleteLegacyGroupPersonNote(
+  database: DbLike,
+  input: { providerGroupId: string; docKey: string },
+): Promise<void> {
+  const [legacyDoc] = await database
+    .select({ id: knowledgeGroupDocs.id })
+    .from(knowledgeGroupDocs)
+    .where(
+      and(
+        eq(knowledgeGroupDocs.providerGroupId, input.providerGroupId),
+        eq(knowledgeGroupDocs.docKey, input.docKey),
+      ),
+    )
+    .limit(1);
+  if (!legacyDoc) {
+    return;
+  }
+  const legacyVersions = await database
+    .select({ id: knowledgeVersions.id })
+    .from(knowledgeVersions)
+    .where(and(eq(knowledgeVersions.scope, "group"), eq(knowledgeVersions.docRefId, legacyDoc.id)));
+  const legacyVersionIds = legacyVersions.map((version) => version.id);
+  await deleteKnowledgeVersionIndexRows(database, legacyVersionIds);
+  if (legacyVersionIds.length) {
+    await database
+      .delete(knowledgeVersions)
+      .where(inArray(knowledgeVersions.id, legacyVersionIds));
+  }
+  await database
+    .delete(knowledgeGroupDocs)
+    .where(eq(knowledgeGroupDocs.id, legacyDoc.id));
+}
+
+async function deleteKnowledgeVersionIndexRows(database: DbLike, versionIds: string[]): Promise<void> {
+  if (!versionIds.length) {
+    return;
+  }
+  await database
+    .delete(embeddings)
+    .where(inArray(embeddings.sourceVersionId, versionIds));
+  await database
+    .delete(retrievalChunks)
+    .where(
+      and(
+        eq(retrievalChunks.sourceType, "knowledge_version"),
+        inArray(retrievalChunks.sourceId, versionIds),
+      ),
+    );
+}
+
+function personNoteDocKey(): string {
+  return "person-note";
+}
+
+function legacyPersonNoteDocKey(providerUserId: string): string {
   const digest = createHash("sha256").update(providerUserId).digest("hex").slice(0, 16);
   return `person-note-${digest}`;
 }

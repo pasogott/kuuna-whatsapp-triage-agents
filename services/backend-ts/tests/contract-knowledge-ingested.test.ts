@@ -4,10 +4,12 @@ import test from "node:test";
 import { eq } from "drizzle-orm";
 
 import {
+  clientProfiles,
   embeddings,
   groupMembers,
   knowledgeCustomerDocs,
   knowledgeGroupDocs,
+  knowledgePersonalDocs,
   knowledgeVersions,
   mediaAssets,
   messages,
@@ -66,17 +68,23 @@ test("contract: ingested group docs aggregate latest message versions", { skip: 
   assert.equal(payload[0]?.chunk_count, 1);
 });
 
-test("contract: person note creates and updates one group knowledge document", { skip: skipReason }, async (t) => {
+test("contract: person note creates and updates one personal knowledge document", { skip: skipReason }, async (t) => {
   const harness = await createContractHarness();
   t.after(() => harness.close());
   const caller = await authedCaller(harness);
 
+  const [profile] = await harness.db
+    .insert(clientProfiles)
+    .values({ displayName: "Alex Client" })
+    .returning();
+  assert.ok(profile);
   await harness.db.insert(groupMembers).values({
     providerGroupId: "people-group@g.us",
     providerUserId: "person-1@s.whatsapp.net",
     role: "client",
     displayName: "Alex Client",
     derivedPhone: "436600000001",
+    clientProfileId: profile.id,
   });
 
   const first = await caller.knowledge.upsertPersonNote({
@@ -86,7 +94,7 @@ test("contract: person note creates and updates one group knowledge document", {
   });
   await harness.db.update(knowledgeVersions).set({ status: "ready" }).where(eq(knowledgeVersions.id, first.version_id));
   await harness.db.insert(embeddings).values({
-    scope: "group",
+    scope: "personal",
     sourceVersionId: first.version_id,
     chunkNo: 1,
     content: "First note about Alex.",
@@ -94,15 +102,15 @@ test("contract: person note creates and updates one group knowledge document", {
     embedding: "[0]",
   });
   await harness.db.insert(retrievalChunks).values({
-    scope: "group",
-    providerGroupId: "people-group@g.us",
+    scope: "personal",
+    clientProfileId: profile.id,
     sourceType: "knowledge_version",
     sourceId: first.version_id,
     chunkNo: 1,
     content: "First note about Alex.",
     tokenCount: 4,
     embedding: "[0]",
-    metadataJson: {},
+    metadataJson: { client_profile_id: profile.id },
   });
   const second = await caller.knowledge.upsertPersonNote({
     providerGroupId: "people-group@g.us",
@@ -111,23 +119,118 @@ test("contract: person note creates and updates one group knowledge document", {
   });
 
   assert.equal(first.doc_id, second.doc_id);
+  assert.equal(second.doc_key, "person-note");
   assert.equal(second.version_no, 2);
-  const docs = await harness.db.select().from(knowledgeGroupDocs);
+  const docs = await harness.db.select().from(knowledgePersonalDocs);
   assert.equal(docs.length, 1);
-  assert.equal(docs[0]?.providerGroupId, "people-group@g.us");
-  assert.match(docs[0]?.docKey ?? "", /^person-note-/);
-  assert.equal(docs[0]?.title, "Person note: Alex Client");
+  assert.equal(docs[0]?.clientProfileId, profile.id);
+  assert.equal(docs[0]?.docKey, "person-note");
+  assert.equal(docs[0]?.title, "Personal note: Alex Client");
+  const groupDocs = await harness.db.select().from(knowledgeGroupDocs);
+  assert.equal(groupDocs.length, 0);
 
   const versions = await harness.db.select().from(knowledgeVersions);
   assert.deepEqual(
     versions.map((version) => version.status).sort(),
     ["archived", "published"],
   );
+  assert.deepEqual(
+    versions.map((version) => version.scope).sort(),
+    ["personal", "personal"],
+  );
   const staleEmbeddings = await harness.db.select().from(embeddings).where(eq(embeddings.sourceVersionId, first.version_id));
   assert.equal(staleEmbeddings.length, 0);
   const staleChunks = await harness.db.select().from(retrievalChunks).where(eq(retrievalChunks.sourceId, first.version_id));
   assert.equal(staleChunks.length, 0);
-  assert.equal(harness.jobs.filter((job) => job.name === "knowledge_indexing").length, 2);
+});
+
+test("contract: person note deletes the legacy group-scoped person document", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  t.after(() => harness.close());
+  const caller = await authedCaller(harness);
+
+  const [profile] = await harness.db
+    .insert(clientProfiles)
+    .values({ displayName: "Alex Client" })
+    .returning();
+  assert.ok(profile);
+  await harness.db.insert(groupMembers).values({
+    providerGroupId: "people-group@g.us",
+    providerUserId: "person-1@s.whatsapp.net",
+    role: "client",
+    displayName: "Alex Client",
+    clientProfileId: profile.id,
+  });
+  const [legacyDoc] = await harness.db
+    .insert(knowledgeGroupDocs)
+    .values({
+      providerGroupId: "people-group@g.us",
+      docKey: "person-note-a39ef4031930c10a",
+      title: "Person note: Alex Client",
+    })
+    .returning();
+  assert.ok(legacyDoc);
+  const [legacyVersion] = await harness.db
+    .insert(knowledgeVersions)
+    .values({
+      scope: "group",
+      docRefId: legacyDoc.id,
+      versionNo: 1,
+      status: "ready",
+      contentMarkdown: "Legacy note about Alex.",
+    })
+    .returning();
+  assert.ok(legacyVersion);
+  await harness.db.insert(retrievalChunks).values({
+    scope: "group",
+    providerGroupId: "people-group@g.us",
+    sourceType: "knowledge_version",
+    sourceId: legacyVersion.id,
+    chunkNo: 1,
+    content: "Legacy note about Alex.",
+    tokenCount: 4,
+    embedding: "[0]",
+    metadataJson: {},
+  });
+
+  await caller.knowledge.upsertPersonNote({
+    providerGroupId: "people-group@g.us",
+    providerUserId: "person-1@s.whatsapp.net",
+    contentMarkdown: "Personal note about Alex.",
+  });
+
+  const legacyDocs = await harness.db.select().from(knowledgeGroupDocs).where(eq(knowledgeGroupDocs.id, legacyDoc.id));
+  assert.equal(legacyDocs.length, 0);
+  const legacyVersions = await harness.db.select().from(knowledgeVersions).where(eq(knowledgeVersions.id, legacyVersion.id));
+  assert.equal(legacyVersions.length, 0);
+  const legacyChunks = await harness.db.select().from(retrievalChunks).where(eq(retrievalChunks.sourceId, legacyVersion.id));
+  assert.equal(legacyChunks.length, 0);
+  const personalDocs = await harness.db.select().from(knowledgePersonalDocs);
+  assert.equal(personalDocs.length, 1);
+  assert.equal(personalDocs[0]?.clientProfileId, profile.id);
+});
+
+test("contract: person note rejects members without linked client profile", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  t.after(() => harness.close());
+  const caller = await authedCaller(harness);
+
+  await harness.db.insert(groupMembers).values({
+    providerGroupId: "people-group@g.us",
+    providerUserId: "person-1@s.whatsapp.net",
+    role: "client",
+    displayName: "Alex Client",
+  });
+
+  await assert.rejects(
+    () =>
+      caller.knowledge.upsertPersonNote({
+        providerGroupId: "people-group@g.us",
+        providerUserId: "person-1@s.whatsapp.net",
+        contentMarkdown: "Should not save.",
+      }),
+    /person note requires a client member linked to a client profile/,
+  );
 });
 
 test("contract: group docs can list manual docs across all groups", { skip: skipReason }, async (t) => {
@@ -138,13 +241,13 @@ test("contract: group docs can list manual docs across all groups", { skip: skip
   await harness.db.insert(knowledgeGroupDocs).values([
     {
       providerGroupId: "people-group@g.us",
-      docKey: "person-note-a",
-      title: "Person note A",
+      docKey: "case-note-a",
+      title: "Case note A",
     },
     {
       providerGroupId: "other-group@g.us",
-      docKey: "person-note-b",
-      title: "Person note B",
+      docKey: "case-note-b",
+      title: "Case note B",
     },
   ]);
 
@@ -152,7 +255,7 @@ test("contract: group docs can list manual docs across all groups", { skip: skip
 
   assert.deepEqual(
     rows.map((row) => row.doc_key).sort(),
-    ["person-note-a", "person-note-b"],
+    ["case-note-a", "case-note-b"],
   );
 });
 

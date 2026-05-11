@@ -57,13 +57,13 @@ export async function KnowledgeTab({
       </Notice>
 
       {personNoteStatus === "saved" ? (
-        <Notice title="Person note saved" tone="success">
-          The Markdown note was published and queued for Knowledge indexing.
+        <Notice title="Personal note saved" tone="success">
+          The note was published to the client profile and queued for Knowledge indexing.
         </Notice>
       ) : null}
       {personNoteStatus === "error" ? (
-        <Notice title="Person note failed" tone="warning">
-          {personNoteReason ?? "The person note could not be saved."}
+        <Notice title="Personal note failed" tone="warning">
+          {personNoteReason ?? "The personal note could not be saved."}
         </Notice>
       ) : null}
 
@@ -132,7 +132,7 @@ function PersonNoteForm({
   providerGroupId: string;
   members: WhatsAppGroupMember[];
 }) {
-  const selectableMembers = members.filter((member) => member.role !== "bot");
+  const selectableMembers = members.filter((member) => member.role === "client" && member.linkedClientProfile);
   return (
     <form action={savePersonKnowledgeNoteAction} className="grid gap-3 rounded border border-border bg-card p-4">
       <input type="hidden" name="providerGroupId" value={providerGroupId} />
@@ -154,11 +154,11 @@ function PersonNoteForm({
           </select>
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium uppercase text-muted-foreground">Markdown note</span>
+          <span className="text-xs font-medium uppercase text-muted-foreground">Personal note</span>
           <textarea
             name="contentMarkdown"
             className="min-h-28 rounded border border-input bg-background px-3 py-2 text-sm leading-6 outline-none focus:ring-2 focus:ring-ring"
-            placeholder="Add relevant person information for this chat."
+            placeholder="Add relevant personal information for this client."
             required
             disabled={selectableMembers.length === 0}
           />
@@ -169,7 +169,7 @@ function PersonNoteForm({
       </div>
       {selectableMembers.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          Sync or save WhatsApp members in Settings before adding person notes.
+          Configure a client member with a linked client profile before adding personal notes.
         </p>
       ) : null}
     </form>

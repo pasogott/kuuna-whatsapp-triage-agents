@@ -41,15 +41,22 @@ export async function processKnowledgeIndexingJob(
     return { indexed: false, chunkCount: 0 };
   }
 
+  if (version.status !== "published" && version.status !== "ready") {
+    await clearKnowledgeVersionIndex(database, version.id);
+    logger.info("knowledge_indexing_skipped_inactive_version", {
+      trace_id: input.traceId,
+      knowledge_version_id: input.knowledgeVersionId,
+      status: version.status,
+    });
+    return { indexed: false, chunkCount: 0 };
+  }
+
   const chunks = chunkMarkdown(version.contentMarkdown);
   const chunkEmbeddings = await createEmbeddings(chunks, {
     fallbackLogMessage: "knowledge_indexing_openai_not_configured_using_pseudo_embeddings",
   });
 
-  await database.delete(embeddings).where(eq(embeddings.sourceVersionId, version.id));
-  await database
-    .delete(retrievalChunks)
-    .where(and(eq(retrievalChunks.sourceType, "knowledge_version"), eq(retrievalChunks.sourceId, version.id)));
+  await clearKnowledgeVersionIndex(database, version.id);
 
   const metadata = await knowledgeDocMetadata(database, version.scope, version.docRefId);
   let chunkCount = 0;
@@ -106,6 +113,13 @@ export async function processKnowledgeIndexingJob(
   });
 
   return { indexed: chunkCount > 0, chunkCount };
+}
+
+async function clearKnowledgeVersionIndex(database: DbLike, versionId: string): Promise<void> {
+  await database.delete(embeddings).where(eq(embeddings.sourceVersionId, versionId));
+  await database
+    .delete(retrievalChunks)
+    .where(and(eq(retrievalChunks.sourceType, "knowledge_version"), eq(retrievalChunks.sourceId, versionId)));
 }
 
 async function knowledgeDocMetadata(
