@@ -75,12 +75,21 @@ test("uses gpt-5.5 and medium reasoning by default", async () => {
 
 test("applies OPENAI_BASE_URL to Pi OpenAI models", () => {
   const previousBaseUrl = process.env.OPENAI_BASE_URL;
+  const previousApiKey = process.env.OPENAI_API_KEY;
+  const previousPiAuthPath = process.env.PI_AUTH_PATH;
+  process.env.OPENAI_API_KEY = "test-key";
+  delete process.env.PI_AUTH_PATH;
   process.env.OPENAI_BASE_URL = "http://openai-proxy:4000/v1/";
   try {
     const model = getOpenAiModel("gpt-5.5");
 
+    assert.equal(model?.provider, "openai");
     assert.equal(model?.baseUrl, "http://openai-proxy:4000/v1");
   } finally {
+    if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousApiKey;
+    if (previousPiAuthPath === undefined) delete process.env.PI_AUTH_PATH;
+    else process.env.PI_AUTH_PATH = previousPiAuthPath;
     if (previousBaseUrl === undefined) {
       delete process.env.OPENAI_BASE_URL;
     } else {
@@ -91,17 +100,44 @@ test("applies OPENAI_BASE_URL to Pi OpenAI models", () => {
 
 test("uses the default OpenAI base URL when OPENAI_BASE_URL is blank", () => {
   const previousBaseUrl = process.env.OPENAI_BASE_URL;
+  const previousApiKey = process.env.OPENAI_API_KEY;
+  const previousPiAuthPath = process.env.PI_AUTH_PATH;
+  process.env.OPENAI_API_KEY = "test-key";
+  delete process.env.PI_AUTH_PATH;
   process.env.OPENAI_BASE_URL = " ";
   try {
     const model = getOpenAiModel("gpt-5.5");
 
+    assert.equal(model?.provider, "openai");
     assert.equal(model?.baseUrl, DEFAULT_OPENAI_BASE_URL);
   } finally {
+    if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousApiKey;
+    if (previousPiAuthPath === undefined) delete process.env.PI_AUTH_PATH;
+    else process.env.PI_AUTH_PATH = previousPiAuthPath;
     if (previousBaseUrl === undefined) {
       delete process.env.OPENAI_BASE_URL;
     } else {
       process.env.OPENAI_BASE_URL = previousBaseUrl;
     }
+  }
+});
+
+test("uses Pi OpenAI Codex provider when only ChatGPT auth is configured", () => {
+  const previousApiKey = process.env.OPENAI_API_KEY;
+  const previousPiAuthPath = process.env.PI_AUTH_PATH;
+  delete process.env.OPENAI_API_KEY;
+  process.env.PI_AUTH_PATH = "/tmp/pi-auth.json";
+  try {
+    const model = getOpenAiModel("gpt-5.5");
+
+    assert.equal(model?.provider, "openai-codex");
+    assert.equal(model?.id, "gpt-5.5");
+  } finally {
+    if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousApiKey;
+    if (previousPiAuthPath === undefined) delete process.env.PI_AUTH_PATH;
+    else process.env.PI_AUTH_PATH = previousPiAuthPath;
   }
 });
 

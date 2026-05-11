@@ -25,6 +25,8 @@ const reservedRuntimeEnvKeys = new Set([
   "OPENAI_AUDIO_TRANSCRIPTION_MODEL",
   "OPENAI_TIMEOUT_SECONDS",
   "OPENAI_VISION_MODEL",
+  "PI_AUTH_PATH",
+  "PI_TRANSPORT",
   "RUNTIME_AGENT_DEFAULT_MODEL",
   "RUNTIME_AGENT_REASONING_EFFORT",
   "KUUNA_PROVIDER_GROUP_ID",
@@ -142,6 +144,7 @@ export async function ensureRuntimeForChat(
     await acquireChatProvisioningLock(tx, input.providerGroupId);
     const target = await resolveProvisioningTarget(tx, input.providerGroupId);
     const image = target.imageRef || settings.RUNTIME_AGENT_IMAGE.trim();
+    const fallbackImage = target.imageRef ? normalizeOptional(settings.RUNTIME_AGENT_IMAGE) : null;
     if (!image) {
       throw new RuntimeProvisioningError("runtime_image_required", "runtime image is required");
     }
@@ -157,6 +160,7 @@ export async function ensureRuntimeForChat(
     const result = await provisionRuntimeContainer(dockerClient, {
       identity,
       image,
+      fallbackImage: fallbackImage && fallbackImage !== image ? fallbackImage : undefined,
       settings,
     });
 
@@ -190,23 +194,23 @@ export async function provisionRuntimeContainer(
   input: {
     identity: RuntimeIdentity;
     image: string;
+    fallbackImage?: string;
     settings: Settings;
   },
 ): Promise<RuntimeProvisioningResult> {
   const port = input.settings.RUNTIME_AGENT_CONTAINER_PORT;
   const dockerNetwork = normalizeOptional(input.settings.RUNTIME_DOCKER_NETWORK);
-  const imageInspect = await dockerClient.inspectImage(input.image).catch((error: unknown) => {
-    throw new RuntimeProvisioningError(
-      "runtime_image_inspect_failed",
-      `failed to inspect runtime image ${input.image}: ${errorMessage(error)}`,
-    );
-  });
+  const resolvedImage = await inspectRuntimeImage(dockerClient, input.image, input.fallbackImage);
+  const image = resolvedImage.image;
+  const imageInspect = resolvedImage.inspect;
   const baseLabels = buildRuntimeLabels(input.identity);
   const env = buildRuntimeEnv(input.identity, input.settings);
+  const binds = buildRuntimeBinds(input.identity.containerName, input.settings);
   const labels = withRuntimeConfigLabels(baseLabels, {
-    image: input.image,
+    image,
     imageId: imageInspect.Id,
     env,
+    binds,
   });
 
   const existing = await dockerClient.inspectContainer(input.identity.containerName);
@@ -215,19 +219,18 @@ export async function provisionRuntimeContainer(
     containerId = (await dockerClient.createContainer(
       input.identity.containerName,
       buildCreateContainerPayload({
-        image: input.image,
+        image,
         port,
         env,
         labels,
         containerName: input.identity.containerName,
-        dataVolumeName: dataVolumeName(input.identity.containerName, input.settings),
-        dataDir: input.settings.RUNTIME_CONTAINER_DATA_DIR,
+        binds,
         dockerNetwork,
       }),
     )).Id;
   } else {
     assertManagedContainerIdentity(existing, input.identity);
-    if (!containerMatchesRuntimeConfig(existing, input.image, imageInspect.Id, labels)) {
+    if (!containerMatchesRuntimeConfig(existing, image, imageInspect.Id, labels)) {
       await dockerClient.removeContainer(existing.Id).catch((error: unknown) => {
         throw new RuntimeProvisioningError(
           "runtime_container_remove_failed",
@@ -237,13 +240,12 @@ export async function provisionRuntimeContainer(
       containerId = (await dockerClient.createContainer(
         input.identity.containerName,
         buildCreateContainerPayload({
-          image: input.image,
+          image,
           port,
           env,
           labels,
           containerName: input.identity.containerName,
-          dataVolumeName: dataVolumeName(input.identity.containerName, input.settings),
-          dataDir: input.settings.RUNTIME_CONTAINER_DATA_DIR,
+          binds,
           dockerNetwork,
         }),
       )).Id;
@@ -314,6 +316,7 @@ export function buildRuntimeEnv(identity: RuntimeIdentity, settings: Settings): 
     OPENAI_AUDIO_TRANSCRIPTION_MODEL: settings.OPENAI_AUDIO_TRANSCRIPTION_MODEL,
     OPENAI_TIMEOUT_SECONDS: String(settings.OPENAI_TIMEOUT_SECONDS),
     OPENAI_VISION_MODEL: settings.OPENAI_VISION_MODEL,
+    PI_TRANSPORT: settings.PI_TRANSPORT,
     RUNTIME_AGENT_DEFAULT_MODEL: defaultRuntimeModel,
     RUNTIME_AGENT_REASONING_EFFORT: defaultReasoningEffort,
     KUUNA_PROVIDER_GROUP_ID: identity.providerGroupId,
@@ -329,6 +332,9 @@ export function buildRuntimeEnv(identity: RuntimeIdentity, settings: Settings): 
   }
   if (settings.OPENAI_API_KEY?.trim()) {
     env.OPENAI_API_KEY = settings.OPENAI_API_KEY;
+  }
+  if (settings.PI_AUTH_HOST_PATH?.trim()) {
+    env.PI_AUTH_PATH = settings.PI_AUTH_CONTAINER_PATH;
   }
   Object.assign(env, parseExtraEnv(settings.RUNTIME_CONTAINER_EXTRA_ENV_JSON));
   return Object.entries(env).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}=${value}`);
@@ -369,13 +375,14 @@ export function parseExtraEnv(rawValue: string | undefined): Record<string, stri
 
 export function withRuntimeConfigLabels(
   labels: Record<string, string>,
-  input: { image: string; imageId: string; env: string[] },
+  input: { image: string; imageId: string; env: string[]; binds: string[] },
 ): Record<string, string> {
   const next: Record<string, string> = { ...labels, [runtimeImageIdLabel]: input.imageId };
   next[runtimeConfigHashLabel] = runtimeConfigHash({
     image: input.image,
     imageId: input.imageId,
     env: input.env,
+    binds: input.binds,
     labels,
   });
   return next;
@@ -385,6 +392,7 @@ function runtimeConfigHash(input: {
   image: string;
   imageId: string;
   env: string[];
+  binds: string[];
   labels: Record<string, string>;
 }): string {
   return createHash("sha256")
@@ -392,9 +400,50 @@ function runtimeConfigHash(input: {
       image: input.image,
       imageId: input.imageId,
       env: [...input.env].sort(),
+      binds: [...input.binds].sort(),
       labels: Object.entries(input.labels).sort(([left], [right]) => left.localeCompare(right)),
     }))
     .digest("hex");
+}
+
+async function inspectRuntimeImage(
+  dockerClient: DockerClient,
+  image: string,
+  fallbackImage: string | undefined,
+): Promise<{ image: string; inspect: DockerImageInspect }> {
+  try {
+    return { image, inspect: await dockerClient.inspectImage(image) };
+  } catch (error) {
+    if (!fallbackImage || !isMissingDockerImageError(error)) {
+      throw new RuntimeProvisioningError(
+        "runtime_image_inspect_failed",
+        `failed to inspect runtime image ${image}: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  try {
+    return { image: fallbackImage, inspect: await dockerClient.inspectImage(fallbackImage) };
+  } catch (fallbackError) {
+    throw new RuntimeProvisioningError(
+      "runtime_image_inspect_failed",
+      `failed to inspect runtime image ${image}; fallback image ${fallbackImage} also failed: ${errorMessage(fallbackError)}`,
+    );
+  }
+}
+
+function isMissingDockerImageError(error: unknown): boolean {
+  const message = errorMessage(error);
+  return /\bHTTP 404\b/.test(message) || /\bNo such image\b/i.test(message);
+}
+
+function buildRuntimeBinds(containerName: string, settings: Settings): string[] {
+  const binds = [`${dataVolumeName(containerName, settings)}:${settings.RUNTIME_CONTAINER_DATA_DIR}`];
+  const piAuthHostPath = normalizeOptional(settings.PI_AUTH_HOST_PATH);
+  if (piAuthHostPath) {
+    binds.push(`${piAuthHostPath}:${settings.PI_AUTH_CONTAINER_PATH}:ro`);
+  }
+  return binds;
 }
 
 function buildCreateContainerPayload(input: {
@@ -403,8 +452,7 @@ function buildCreateContainerPayload(input: {
   env: string[];
   labels: Record<string, string>;
   containerName: string;
-  dataVolumeName: string;
-  dataDir: string;
+  binds: string[];
   dockerNetwork: string | null;
 }): DockerCreateContainerPayload {
   const exposedPort = `${input.port}/tcp`;
@@ -415,7 +463,7 @@ function buildCreateContainerPayload(input: {
     ExposedPorts: { [exposedPort]: {} },
     HostConfig: {
       RestartPolicy: { Name: "unless-stopped" },
-      Binds: [`${input.dataVolumeName}:${input.dataDir}`],
+      Binds: input.binds,
     },
   };
   if (input.dockerNetwork) {

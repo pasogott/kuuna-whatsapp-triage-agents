@@ -1,5 +1,14 @@
 import { z } from "zod";
 
+const optionalNonEmptyString = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().optional(),
+);
+const absoluteContainerPath = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().min(1).refine((value) => value.startsWith("/"), "must be an absolute container path").default("/runtime-data/pi-auth.json"),
+);
+
 const envSchema = z.object({
   APP_ENV: z.string().default("dev"),
   HOST: z.string().default("::"),
@@ -28,6 +37,9 @@ const envSchema = z.object({
   OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
   OPENAI_AUDIO_TRANSCRIPTION_MODEL: z.string().default("gpt-4o-mini-transcribe"),
   OPENAI_VISION_MODEL: z.string().default("gpt-4.1-mini"),
+  PI_TRANSPORT: z.enum(["sse", "websocket", "websocket-cached", "auto"]).default("websocket-cached"),
+  PI_AUTH_HOST_PATH: optionalNonEmptyString,
+  PI_AUTH_CONTAINER_PATH: absoluteContainerPath,
   S3_ENDPOINT_URL: z.string().optional(),
   S3_BUCKET: z.string().default("kuuna-dev"),
   S3_ACCESS_KEY: z.string().optional(),

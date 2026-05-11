@@ -1,18 +1,31 @@
 import { getModel, type Api, type Model } from "@mariozechner/pi-ai";
 import type { ReasoningEffort } from "@kuuna/agent-contracts";
-import { defaultModel, defaultReasoningEffort, MAX_MODEL_ATTEMPTS, openAiBaseUrl } from "./config.js";
+import { defaultModel, defaultReasoningEffort, MAX_MODEL_ATTEMPTS, openAiApiKey, openAiBaseUrl, piAuthPath } from "./config.js";
 
-export function normalizeModelName(modelName: string): string {
+const openAiApiProvider = "openai";
+const openAiCodexProvider = "openai-codex";
+
+function splitProviderModel(modelName: string): { provider: string | undefined; modelName: string } {
   const trimmed = modelName.trim();
-  if (!trimmed) {
-    return "";
-  }
-  for (const prefix of ["openai/", "openai:"]) {
-    if (trimmed.startsWith(prefix)) {
-      return trimmed.slice(prefix.length);
+  for (const separator of ["/", ":"]) {
+    const index = trimmed.indexOf(separator);
+    if (index <= 0) {
+      continue;
+    }
+    const provider = trimmed.slice(0, index);
+    if (provider === openAiApiProvider || provider === openAiCodexProvider) {
+      return { provider, modelName: trimmed.slice(index + 1) };
     }
   }
-  return trimmed;
+  return { provider: undefined, modelName: trimmed };
+}
+
+export function normalizeModelName(modelName: string): string {
+  const parsed = splitProviderModel(modelName);
+  if (!parsed.modelName) {
+    return "";
+  }
+  return parsed.modelName;
 }
 
 export function modelPath(candidates: string[]): string[] {
@@ -29,9 +42,14 @@ export function piThinkingLevel(effort: ReasoningEffort | undefined): "off" | "m
 }
 
 export function getOpenAiModel(modelName: string): Model<Api> | undefined {
-  const model = getModel("openai", normalizeModelName(modelName) as never);
+  const parsed = splitProviderModel(modelName);
+  const provider = parsed.provider ?? (openAiApiKey() || !piAuthPath() ? openAiApiProvider : openAiCodexProvider);
+  const model = getModel(provider as never, parsed.modelName as never);
   if (!model) {
     return undefined;
   }
-  return { ...model, baseUrl: openAiBaseUrl() };
+  if (provider === openAiApiProvider) {
+    return { ...model, baseUrl: openAiBaseUrl() };
+  }
+  return model;
 }
