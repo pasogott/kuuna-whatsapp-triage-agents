@@ -170,6 +170,37 @@ Useful local overrides:
 - `DASHBOARD_REQUIRED_ADMIN_PASSWORD` in both backend and dashboard local env files
 - `GATEWAY_SERVICE_TOKEN`, `GATEWAY_OPS_TOKEN`, and `INTERNAL_OPS_TOKEN` when testing token enforcement
 
+### Pi ChatGPT Auth
+The runtime can use Pi credentials created by signing in to ChatGPT from Pi.
+Run Pi locally once, then log in with the ChatGPT Plus/Pro (Codex) provider:
+
+```bash
+pnpm exec pi
+```
+
+Inside Pi:
+
+```text
+/login
+/settings
+```
+
+In `/login`, select `ChatGPT Plus/Pro (Codex)`. In `/settings`, set
+`transport` to `websocket-cached`.
+
+Then mount the generated Pi auth file into managed runtime containers from
+`infra/env/backend.env.local`:
+
+```bash
+OPENAI_API_KEY=
+PI_TRANSPORT=websocket-cached
+PI_AUTH_HOST_PATH=/Users/flybyflo/.pi/agent/auth.json
+PI_AUTH_CONTAINER_PATH=/runtime-data/pi-auth.json
+```
+
+`OPENAI_API_KEY` still works as an explicit API-key override. Leave it empty
+when the runtime should use the mounted ChatGPT login credentials.
+
 ### Development Start
 Run the full development stack from the repository root:
 
