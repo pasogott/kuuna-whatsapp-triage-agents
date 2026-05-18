@@ -31,7 +31,8 @@ services:
       - path: ../env/dashboard.env.local
         required: false
     ports:
-      - "127.0.0.1:3000:3000"
+      # Development-only tailnet override for app HTTP ports. Data stores stay loopback-bound.
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:3000:3000"
     volumes:
       - ../..:/workspace
       - workspace_node_modules:/workspace/node_modules
@@ -59,7 +60,7 @@ services:
       RUNTIME_AGENT_TIMEOUT_SECONDS: ${RUNTIME_AGENT_TIMEOUT_SECONDS:-300}
       WATCHFILES_FORCE_POLLING: "true"
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:8000:8000"
     volumes:
       - ../..:/workspace
       - workspace_node_modules:/workspace/node_modules
@@ -154,7 +155,7 @@ services:
     environment:
       WATCHFILES_FORCE_POLLING: "true"
     ports:
-      - "127.0.0.1:8090:8090"
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:8090:8090"
     volumes:
       - ../..:/workspace
       - workspace_node_modules:/workspace/node_modules

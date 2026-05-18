@@ -242,6 +242,10 @@ The dev stack starts:
 Hot reload is enabled for dashboard, backend, worker, and gateway through
 bind-mounted source code.
 
+Use the development stack only for local development. It runs the dashboard with
+`next dev` and runs backend, worker, and gateway in watch mode, so it is not the
+intended remote/server deployment mode.
+
 The runtime agent is not a shared Compose service in development. The worker
 lazily creates one managed runtime container per `provider_group_id` when that
 chat first needs agent work.
@@ -420,6 +424,68 @@ Prod service URLs on the host:
 - Gateway ops API: http://localhost:8090
 - MinIO console: http://localhost:9001
 
+### Remote Server Deployment Mode
+On a remote single-host deployment, use the production Compose file. Do not use
+`just up` or `infra/compose/docker-compose.dev.yml` for the staff dashboard on a
+server; that starts the slower development server and watch-mode services.
+
+For a detached remote start:
+
+```bash
+docker compose -f infra/compose/docker-compose.prod.yml up --build -d
+```
+
+Check which stack is active:
+
+```bash
+docker compose ls --all
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
+```
+
+The active remote dashboard stack should show `kuuna-prod` containers. If
+`kuuna-dev` containers are running, the server is using the development stack.
+
+Expose the remote dashboard through Tailscale Serve, not direct public ports or
+Tailscale Funnel. The committed helper owns the node-level Serve config for this
+host:
+
+```bash
+infra/compose/tailscale-serve.cyberheld-ai-team.sh
+```
+
+Use this helper for the current node-level Serve setup. The newer
+`tailscale serve set-config` file flow is for Tailscale Services and is not the
+active deployment model for this host. The helper runs `tailscale serve reset`,
+so only use it on a node where the Tailscale Serve config is owned by this
+Kuuna deployment.
+
+For the browser-side tRPC client and subscriptions to use this `/trpc` route,
+set the dashboard build-time public API origin to the Tailscale HTTPS origin
+before rebuilding the image:
+
+```bash
+export NEXT_PUBLIC_API_BASE_URL=https://cyberheld-ai-team.snapper-ide.ts.net
+docker compose -f infra/compose/docker-compose.prod.yml up --build -d dashboard
+```
+
+`NEXT_PUBLIC_API_BASE_URL` is passed as a dashboard Docker build arg by Compose,
+so it must come from the Compose environment or `.env` used for the build.
+`infra/env/dashboard.env.local` is still useful for runtime dashboard env, but
+does not by itself set the build arg.
+
+Expected status:
+
+```text
+https://cyberheld-ai-team.snapper-ide.ts.net (tailnet only)
+|-- /     proxy http://localhost:3000
+|-- /trpc proxy http://localhost:8000
+```
+
+The root path serves the dashboard. The `/trpc` path is required for browser
+tRPC subscriptions and is routed through the same Tailscale HTTPS origin instead
+of exposing backend port `8000` directly. Do not use Funnel for the staff
+dashboard unless the service is intentionally being made public.
+
 Stop the prod stack:
 
 ```bash
@@ -440,8 +506,9 @@ just prod-migrate
 
 Before exposing the prod stack beyond localhost, create `infra/env/*.env.local`
 files with real credentials and tokens, set build-time public values such as
-`NEXT_PUBLIC_API_BASE_URL` for the deployment host, and put a TLS reverse proxy
-in front of the services.
+`NEXT_PUBLIC_API_BASE_URL` for the deployment host, and use either the Tailscale
+Serve route above for tailnet-only access or a TLS reverse proxy for intentional
+public access.
 
 ## TypeScript Monorepo Commands
 

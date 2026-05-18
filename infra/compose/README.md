@@ -2,6 +2,12 @@
 
 Use Docker for all local runs (frontend + backend + gateway + infra dependencies).
 
+This file documents the development stack only. Do not use `just up` or
+`infra/compose/docker-compose.dev.yml` as the remote staff-dashboard deployment:
+it runs Next.js in development mode and starts watch-mode backend, worker, and
+gateway processes. Remote single-host deployments should use
+`infra/compose/docker-compose.prod.yml`.
+
 ## Start
 ```bash
 just up
@@ -21,6 +27,20 @@ just down
 - Backend API: `tsx watch` runs the TypeScript backend with bind-mounted source.
 - Worker: `tsx watch` runs the TypeScript BullMQ worker with bind-mounted source.
 - Gateway: `tsx watch` runs the Baileys TypeScript gateway with bind-mounted source.
+
+## Development Tailnet Port Binding
+
+By default, all development stack ports are published on `127.0.0.1` only.
+For development-only tailnet debugging, `TAILSCALE_BIND_IP` may be set to the
+host's Tailscale IP to bind the dashboard, backend API, and gateway ops HTTP
+ports to that interface:
+
+```bash
+TAILSCALE_BIND_IP=100.x.y.z just up
+```
+
+Postgres, Redis, and MinIO stay pinned to `127.0.0.1` and are not moved by this
+override.
 
 ## WhatsApp Session Persistence (Gateway)
 The gateway stores Baileys auth/session state in the named Docker volume `gateway_session` at `/data`.
@@ -58,6 +78,13 @@ Scripts:
 
 Restore runbook:
 - `infra/compose/DR_RUNBOOK.md`
+
+Remote Tailscale Serve helper:
+- `infra/compose/tailscale-serve.cyberheld-ai-team.sh`
+
+The helper resets the node-level Tailscale Serve config before applying the
+Kuuna dashboard and `/trpc` routes. Use it only on a node where Kuuna owns the
+Tailscale Serve config.
 
 ## Database Migrations
 
