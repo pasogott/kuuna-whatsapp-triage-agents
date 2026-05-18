@@ -27,6 +27,25 @@ Environment variables:
 - `GATEWAY_SYNC_FULL_HISTORY` (default `false`; asks WhatsApp for full history when enabled)
 - `GATEWAY_PROCESS_HISTORY_SYNC` (default `false`; processes Baileys history-sync batches when enabled)
 
+### WhatsApp History Backfill
+
+Deploying with the default environment keeps history backfill disabled. No new
+environment variables are required unless backfill should be intentionally
+enabled.
+
+To enable backfill, set both flags on the gateway service and restart it:
+
+```env
+GATEWAY_SYNC_FULL_HISTORY=true
+GATEWAY_PROCESS_HISTORY_SYNC=true
+```
+
+`GATEWAY_SYNC_FULL_HISTORY` asks WhatsApp for full history. `GATEWAY_PROCESS_HISTORY_SYNC`
+allows Baileys history batches to be sent through the normal backend ingest path.
+Backfilled messages are deduped like live messages by provider group and provider
+message id, but new historical messages can still trigger indexing and passive
+analysis for active bindings.
+
 ## Sentry
 
 - Sentry project: `kuuna-gateway`
