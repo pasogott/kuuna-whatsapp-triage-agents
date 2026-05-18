@@ -84,7 +84,9 @@ Remote Tailscale Serve helper:
 
 The helper resets the node-level Tailscale Serve config before applying the
 Kuuna dashboard and `/trpc` routes. Use it only on a node where Kuuna owns the
-Tailscale Serve config.
+Tailscale Serve config. The `/trpc` backend target intentionally includes the
+same `/trpc` path because Tailscale Serve strips the matched path before
+proxying.
 
 ## Database Migrations
 
