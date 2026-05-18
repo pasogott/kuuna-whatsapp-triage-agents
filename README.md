@@ -478,13 +478,15 @@ Expected status:
 ```text
 https://cyberheld-ai-team.snapper-ide.ts.net (tailnet only)
 |-- /     proxy http://localhost:3000
-|-- /trpc proxy http://localhost:8000
+|-- /trpc proxy http://localhost:8000/trpc
 ```
 
 The root path serves the dashboard. The `/trpc` path is required for browser
 tRPC subscriptions and is routed through the same Tailscale HTTPS origin instead
-of exposing backend port `8000` directly. Do not use Funnel for the staff
-dashboard unless the service is intentionally being made public.
+of exposing backend port `8000` directly. The target includes `/trpc` because
+Tailscale Serve strips the matched path prefix before proxying. Do not use
+Funnel for the staff dashboard unless the service is intentionally being made
+public.
 
 Stop the prod stack:
 
