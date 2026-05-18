@@ -15,6 +15,7 @@ The backend provider literal is `whatsapp-baileys`.
 - `connection.update` -> connection status and QR cache
 - `creds.update` -> persisted auth state
 - `messages.upsert` -> map event -> backend tRPC `gateway.inbound.ingest`
+- `messaging-history.set` -> map backfilled messages -> backend tRPC `gateway.inbound.ingest`
 
 Entry point: `src/server.ts`
 
@@ -23,6 +24,8 @@ Environment variables:
 - `BACKEND_BASE_URL` (default `http://backend:8000`)
 - `GATEWAY_SERVICE_TOKEN` (optional)
 - `BAILEYS_AUTH_DIR` (default `/data/baileys-auth` in Docker)
+- `GATEWAY_SYNC_FULL_HISTORY` (default `false`; asks WhatsApp for full history when enabled)
+- `GATEWAY_PROCESS_HISTORY_SYNC` (default `false`; processes Baileys history-sync batches when enabled)
 
 ## Sentry
 

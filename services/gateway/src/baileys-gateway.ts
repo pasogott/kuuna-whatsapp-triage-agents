@@ -16,8 +16,18 @@ import type {
 
 type AnyRecord = Record<string, unknown>;
 type BaileysModule = typeof import("@whiskeysockets/baileys");
+type HistorySyncNotification = import("@whiskeysockets/baileys").proto.Message.IHistorySyncNotification;
 type WASocket = import("@whiskeysockets/baileys").WASocket;
 type WAMessage = import("@whiskeysockets/baileys").WAMessage;
+type MessagingHistorySetEvent = {
+  chats?: unknown[];
+  contacts?: unknown[];
+  messages?: WAMessage[];
+  isLatest?: boolean;
+  progress?: number | null;
+  syncType?: unknown;
+  peerDataRequestSessionId?: string | null;
+};
 
 export class BaileysGateway implements GatewayClient {
   private socket: WASocket | null = null;
@@ -38,6 +48,8 @@ export class BaileysGateway implements GatewayClient {
       qrStatus: GatewayQrStatus;
       logLevel?: string;
       printQrToConsole?: boolean;
+      syncFullHistory?: boolean;
+      processHistorySync?: boolean;
       qrRenderer?: (qr: string) => void;
       socketFactory?: (config: unknown) => WASocket;
       baileysModule?: BaileysModule;
@@ -158,10 +170,18 @@ export class BaileysGateway implements GatewayClient {
 
     const socketFactory = this.input.socketFactory ?? ((config: unknown) => baileys.makeWASocket(config as never));
     const logger = this.logger.child({ component: "baileys" });
+    const syncFullHistory = this.input.syncFullHistory === true;
+    const processHistorySync = this.input.processHistorySync === true;
     const auth =
       typeof baileys.makeCacheableSignalKeyStore === "function"
         ? { creds: state.creds, keys: baileys.makeCacheableSignalKeyStore(state.keys, logger) }
         : state;
+
+    this.logger.info({
+      event: "gateway_history_sync_configured",
+      sync_full_history: syncFullHistory,
+      process_history_sync: processHistorySync,
+    });
 
     const socket = socketFactory({
       auth,
@@ -169,8 +189,16 @@ export class BaileysGateway implements GatewayClient {
       logger,
       browser: baileys.Browsers.appropriate(this.input.sessionName),
       markOnlineOnConnect: false,
-      syncFullHistory: false,
-      shouldSyncHistoryMessage: () => false,
+      syncFullHistory,
+      shouldSyncHistoryMessage: (message: HistorySyncNotification) => {
+        this.logger.info({
+          event: "gateway_history_sync_notification_decision",
+          sync_type: historySyncType(message.syncType),
+          process: processHistorySync,
+          sync_full_history: syncFullHistory,
+        });
+        return processHistorySync;
+      },
       getMessage: async () => undefined,
     } as AnyRecord);
     this.socket = socket;
@@ -247,6 +275,26 @@ export class BaileysGateway implements GatewayClient {
       });
       void this.handleMessages(messages).catch((error) => {
         this.logger.error({ event: "gateway_messages_upsert_failed", error: errorMessage(error) });
+      });
+    });
+
+    socket.ev.on("messaging-history.set", (event: MessagingHistorySetEvent) => {
+      const messages = Array.isArray(event.messages) ? event.messages : [];
+      const processHistorySync = this.input.processHistorySync === true;
+      this.logger.info({
+        event: "gateway_messaging_history_received",
+        process: processHistorySync,
+        sync_type: historySyncType(event.syncType),
+        message_count: messages.length,
+        chat_count: Array.isArray(event.chats) ? event.chats.length : 0,
+        contact_count: Array.isArray(event.contacts) ? event.contacts.length : 0,
+        is_latest: event.isLatest ?? null,
+        progress: typeof event.progress === "number" ? event.progress : null,
+        peer_data_request_session_id: event.peerDataRequestSessionId ?? null,
+      });
+      if (!processHistorySync) return;
+      void this.handleMessages(messages).catch((error) => {
+        this.logger.error({ event: "gateway_messaging_history_failed", error: errorMessage(error) });
       });
     });
   }
@@ -431,6 +479,11 @@ function stringValue(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+function historySyncType(value: unknown): string | number | null {
+  if (typeof value === "string" || typeof value === "number") return value;
+  return null;
 }
 
 function mapGroupParticipant(value: unknown, selfJid: string | null, selfPhone: string | null): GatewayGroupParticipant | null {
