@@ -65,6 +65,9 @@ Scripts:
 Restore runbook:
 - `infra/compose/DR_RUNBOOK.md`
 
+Remote Tailscale Serve helper:
+- `infra/compose/tailscale-serve.cyberheld-ai-team.sh`
+
 ## Database Migrations
 
 Compose runs migrations through the TypeScript backend service:

@@ -445,6 +445,31 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
 The active remote dashboard stack should show `kuuna-prod` containers. If
 `kuuna-dev` containers are running, the server is using the development stack.
 
+Expose the remote dashboard through Tailscale Serve, not direct public ports or
+Tailscale Funnel. The committed helper owns the node-level Serve config for this
+host:
+
+```bash
+infra/compose/tailscale-serve.cyberheld-ai-team.sh
+```
+
+Use this helper for the current node-level Serve setup. The newer
+`tailscale serve set-config` file flow is for Tailscale Services and is not the
+active deployment model for this host.
+
+Expected status:
+
+```text
+https://cyberheld-ai-team.snapper-ide.ts.net (tailnet only)
+|-- /     proxy http://localhost:3000
+|-- /trpc proxy http://localhost:8000
+```
+
+The root path serves the dashboard. The `/trpc` path is required for browser
+tRPC subscriptions and is routed through the same Tailscale HTTPS origin instead
+of exposing backend port `8000` directly. Do not use Funnel for the staff
+dashboard unless the service is intentionally being made public.
+
 Stop the prod stack:
 
 ```bash
