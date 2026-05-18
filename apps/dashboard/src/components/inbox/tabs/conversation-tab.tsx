@@ -4,9 +4,7 @@ import {
 } from "@/components/inbox/chat-timeline";
 import { Notice } from "@/components/ui/notice";
 import {
-  listMediaAssets,
-  listMessages,
-  listMessageVersions,
+  listConversationMessages,
   listOutboundIntents,
 } from "@/lib/api-client";
 
@@ -25,21 +23,11 @@ export async function ConversationTab({
   providerGroupId: string;
 }) {
   const [scopedMessages, outbound] = await Promise.all([
-    listMessages(providerGroupId),
+    listConversationMessages(providerGroupId),
     listOutboundIntents(providerGroupId),
   ]);
 
-  const inbound: InboundEntry[] = await Promise.all(
-    scopedMessages.map(async (message) => {
-      const [versions, media] = await Promise.all([
-        listMessageVersions(message.id),
-        listMediaAssets(message.id),
-      ]);
-      return { message, versions, media };
-    }),
-  );
-
-  const visibleInbound = inbound.filter(inboundHasContent);
+  const visibleInbound = scopedMessages.filter(inboundHasContent);
   const visibleOutbound = outbound.filter(
     (intent) => intent.text.trim().length > 0 || Boolean(intent.lastError),
   );

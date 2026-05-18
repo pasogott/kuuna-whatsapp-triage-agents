@@ -1048,27 +1048,90 @@ export async function listMessages(providerGroupId?: string): Promise<MessageRec
   );
 }
 
+type ConversationMessage = {
+  message: MessageRecord;
+  versions: MessageVersion[];
+  media: MediaAsset[];
+};
+
+function mapMessageVersion(row: {
+  id: string;
+  message_id: string;
+  version_no: number;
+  event_type: string;
+  text?: string | null;
+  occurred_at: string;
+}): MessageVersion {
+  const eventType =
+    row.event_type === "message_deleted"
+      ? "deleted"
+      : row.event_type === "message_edited"
+        ? "edited"
+        : "created";
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    versionNo: row.version_no,
+    eventType,
+    text: row.text ?? "",
+    occurredAt: row.occurred_at,
+  };
+}
+
+export async function listConversationMessages(providerGroupId: string): Promise<ConversationMessage[]> {
+  return withOptionalMock(
+    "listConversationMessages",
+    async () => {
+      const client = await createSessionBackendTrpcClient();
+      const rows = await client.messages.conversation.query({ providerGroupId, limit: 100 });
+      return rows.map((row) => {
+        const raw = asRecord(row.message.latest_raw_event);
+        return {
+          message: {
+            id: row.message.id,
+            providerGroupId: row.message.provider_group_id,
+            sender: row.message.sender_provider_user_id ?? "unknown",
+            senderPhone:
+              typeof row.message.sender_phone === "string"
+                ? row.message.sender_phone
+                : typeof raw.sender_phone === "string"
+                  ? raw.sender_phone
+                  : undefined,
+            senderPushName:
+              typeof row.message.sender_display_name === "string"
+                ? row.message.sender_display_name
+                : typeof row.message.sender_push_name === "string"
+                  ? row.message.sender_push_name
+                  : typeof raw.sender_push_name === "string"
+                    ? raw.sender_push_name
+                    : undefined,
+            preview: row.message.latest_text ?? "",
+            hasMedia: row.message.has_media,
+            isDeleted: row.message.latest_is_deleted,
+            latestVersionNo: row.message.latest_version_no,
+            createdAt: row.message.created_at,
+          },
+          versions: row.versions.map(mapMessageVersion),
+          media: row.media.map(mapMediaAsset),
+        };
+      });
+    },
+    () => mockMessages
+      .filter((item) => item.providerGroupId === providerGroupId)
+      .map((message) => ({
+        message,
+        versions: mockMessageVersions.filter((version) => version.messageId === message.id),
+        media: mockMediaAssets.filter((asset) => asset.messageId === message.id),
+      })),
+  );
+}
+
 export async function listMessageVersions(messageId: string): Promise<MessageVersion[]> {
   return withOptionalMock(
     "listMessageVersions",
     async () => {
       const client = await createSessionBackendTrpcClient();
-      return (await client.messages.versions.query({ messageId })).map((row) => {
-        const eventType =
-          row.event_type === "message_deleted"
-            ? "deleted"
-            : row.event_type === "message_edited"
-              ? "edited"
-              : "created";
-        return {
-          id: row.id,
-          messageId: row.message_id,
-          versionNo: row.version_no,
-          eventType,
-          text: row.text ?? "",
-          occurredAt: row.occurred_at,
-        };
-      });
+      return (await client.messages.versions.query({ messageId })).map(mapMessageVersion);
     },
     () => mockMessageVersions.filter((item) => item.messageId === messageId),
   );
