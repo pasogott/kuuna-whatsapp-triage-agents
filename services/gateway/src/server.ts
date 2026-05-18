@@ -75,6 +75,8 @@ function createDefaultGatewayClient(): GatewayClient {
     authDir: settings.BAILEYS_AUTH_DIR,
     sessionName: settings.GATEWAY_SESSION_NAME,
     printQrToConsole: settings.GATEWAY_PRINT_QR,
+    syncFullHistory: settings.GATEWAY_SYNC_FULL_HISTORY,
+    processHistorySync: settings.GATEWAY_PROCESS_HISTORY_SYNC,
     logLevel: settings.LOG_LEVEL.toLowerCase(),
     backendClient: new BackendIngestClient({
       backendBaseUrl: settings.BACKEND_BASE_URL,

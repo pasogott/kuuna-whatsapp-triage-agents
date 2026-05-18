@@ -65,10 +65,21 @@ function fakeBaileys(socket: FakeSocket) {
       saveCreds: async () => undefined,
     }),
     fetchLatestBaileysVersion: async () => ({ version: [2, 3000, 0], isLatest: true }),
-    makeWASocket: () => Object.assign(socket, {
-      user: { id: "43664000000:4@s.whatsapp.net", name: "Kuuna Bot" },
-    }),
+    makeWASocket: () => socketWithUser(socket),
     downloadMediaMessage: async () => socket.mediaBytes,
+  };
+}
+
+function socketWithUser(socket: FakeSocket) {
+  return Object.assign(socket, {
+    user: { id: "43664000000:4@s.whatsapp.net", name: "Kuuna Bot" },
+  });
+}
+
+function captureSocketConfig(socket: FakeSocket, configs: Record<string, unknown>[]) {
+  return (config: unknown) => {
+    configs.push(config as Record<string, unknown>);
+    return socketWithUser(socket) as never;
   };
 }
 
@@ -99,6 +110,94 @@ function makeGateway(socket: FakeSocket, calls: unknown[], overrides: Partial<Co
     ...overrides,
   });
 }
+
+test("history sync socket settings default to disabled", async () => {
+  const socket = new FakeSocket();
+  const calls: unknown[] = [];
+  const configs: Record<string, unknown>[] = [];
+  const gateway = makeGateway(socket, calls, {
+    socketFactory: captureSocketConfig(socket, configs),
+  });
+
+  await gateway.start();
+
+  assert.equal(configs[0]?.syncFullHistory, false);
+  const shouldSyncHistoryMessage = configs[0]?.shouldSyncHistoryMessage as (message: { syncType: number }) => boolean;
+  assert.equal(shouldSyncHistoryMessage({ syncType: 1 }), false);
+
+  socket.ev.emit("messaging-history.set", {
+    syncType: 1,
+    messages: [
+      {
+        key: { id: "history-disabled", remoteJid: "1203630-group@g.us", fromMe: false },
+        message: { conversation: "should not ingest" },
+      },
+    ],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.length, 0);
+});
+
+test("enabled history sync forwards history messages through inbound ingest", async () => {
+  const socket = new FakeSocket();
+  const calls: unknown[] = [];
+  const configs: Record<string, unknown>[] = [];
+  const gateway = makeGateway(socket, calls, {
+    syncFullHistory: true,
+    processHistorySync: true,
+    socketFactory: captureSocketConfig(socket, configs),
+  });
+
+  await gateway.start();
+
+  assert.equal(configs[0]?.syncFullHistory, true);
+  const shouldSyncHistoryMessage = configs[0]?.shouldSyncHistoryMessage as (message: { syncType: number }) => boolean;
+  assert.equal(shouldSyncHistoryMessage({ syncType: 1 }), true);
+
+  socket.ev.emit("messaging-history.set", {
+    syncType: 1,
+    progress: 100,
+    isLatest: true,
+    chats: [{ id: "1203630-group@g.us" }],
+    contacts: [{ id: "4912345@s.whatsapp.net" }],
+    messages: [
+      {
+        key: {
+          id: "history-msg-1",
+          remoteJid: "1203630-group@g.us",
+          participant: "4912345@s.whatsapp.net",
+          fromMe: false,
+        },
+        messageTimestamp: 1776506400,
+        message: { conversation: "backfilled hello" },
+      },
+    ],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.length, 1);
+  assert.equal((calls[0] as Record<string, unknown>).provider, "whatsapp-baileys");
+  assert.equal((calls[0] as Record<string, unknown>).provider_group_id, "1203630-group@g.us");
+  assert.equal((calls[0] as Record<string, unknown>).provider_message_id, "history-msg-1");
+  assert.equal(((calls[0] as { message: { text: string } }).message).text, "backfilled hello");
+});
+
+test("history processing can be enabled without requesting full history", async () => {
+  const socket = new FakeSocket();
+  const calls: unknown[] = [];
+  const configs: Record<string, unknown>[] = [];
+  const gateway = makeGateway(socket, calls, {
+    processHistorySync: true,
+    socketFactory: captureSocketConfig(socket, configs),
+  });
+
+  await gateway.start();
+
+  assert.equal(configs[0]?.syncFullHistory, false);
+  const shouldSyncHistoryMessage = configs[0]?.shouldSyncHistoryMessage as (message: { syncType: number }) => boolean;
+  assert.equal(shouldSyncHistoryMessage({ syncType: 1 }), true);
+});
 
 test("tracks QR and connection status", async () => {
   const socket = new FakeSocket();
