@@ -242,6 +242,10 @@ The dev stack starts:
 Hot reload is enabled for dashboard, backend, worker, and gateway through
 bind-mounted source code.
 
+Use the development stack only for local development. It runs the dashboard with
+`next dev` and runs backend, worker, and gateway in watch mode, so it is not the
+intended remote/server deployment mode.
+
 The runtime agent is not a shared Compose service in development. The worker
 lazily creates one managed runtime container per `provider_group_id` when that
 chat first needs agent work.
@@ -419,6 +423,27 @@ Prod service URLs on the host:
 - Backend API: http://localhost:8000
 - Gateway ops API: http://localhost:8090
 - MinIO console: http://localhost:9001
+
+### Remote Server Deployment Mode
+On a remote single-host deployment, use the production Compose file. Do not use
+`just up` or `infra/compose/docker-compose.dev.yml` for the staff dashboard on a
+server; that starts the slower development server and watch-mode services.
+
+For a detached remote start:
+
+```bash
+docker compose -f infra/compose/docker-compose.prod.yml up --build -d
+```
+
+Check which stack is active:
+
+```bash
+docker compose ls --all
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
+```
+
+The active remote dashboard stack should show `kuuna-prod` containers. If
+`kuuna-dev` containers are running, the server is using the development stack.
 
 Stop the prod stack:
 

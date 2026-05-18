@@ -2,6 +2,12 @@
 
 Use Docker for all local runs (frontend + backend + gateway + infra dependencies).
 
+This file documents the development stack only. Do not use `just up` or
+`docker-compose.dev.yml` as the remote staff-dashboard deployment: it runs
+Next.js in development mode and starts watch-mode backend, worker, and gateway
+processes. Remote single-host deployments should use
+`infra/compose/docker-compose.prod.yml`.
+
 ## Start
 ```bash
 just up

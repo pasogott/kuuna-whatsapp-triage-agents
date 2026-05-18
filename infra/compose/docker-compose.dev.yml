@@ -31,7 +31,7 @@ services:
       - path: ../env/dashboard.env.local
         required: false
     ports:
-      - "127.0.0.1:3000:3000"
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:3000:3000"
     volumes:
       - ../..:/workspace
       - workspace_node_modules:/workspace/node_modules
@@ -59,7 +59,7 @@ services:
       RUNTIME_AGENT_TIMEOUT_SECONDS: ${RUNTIME_AGENT_TIMEOUT_SECONDS:-300}
       WATCHFILES_FORCE_POLLING: "true"
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:8000:8000"
     volumes:
       - ../..:/workspace
       - workspace_node_modules:/workspace/node_modules
@@ -154,7 +154,7 @@ services:
     environment:
       WATCHFILES_FORCE_POLLING: "true"
     ports:
-      - "127.0.0.1:8090:8090"
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:8090:8090"
     volumes:
       - ../..:/workspace
       - workspace_node_modules:/workspace/node_modules
@@ -173,7 +173,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "127.0.0.1:5432:5432"
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -185,7 +185,7 @@ services:
   redis:
     image: redis:7
     ports:
-      - "127.0.0.1:6379:6379"
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -199,8 +199,8 @@ services:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: miniopassword
     ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:9000:9000"
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:9001:9001"
     volumes:
       - minio_data:/data
 
