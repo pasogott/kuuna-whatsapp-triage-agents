@@ -62,8 +62,8 @@ export const authenticatedProcedure = t.procedure.use(async ({ ctx, next }) => {
 
 function protectedProcedureWithOptions(options: { allowMustChangePassword?: boolean } = {}) {
   return t.procedure.use(async ({ ctx, next }) => {
+    const auth = await requireCurrentAuthContext(ctx.rootDb, ctx.headers, options);
     return ctx.rootDb.transaction(async (tx) => {
-      const auth = await requireCurrentAuthContext(tx, ctx.headers, options);
       await applyRlsContext(tx, auth);
       return next({
         ctx: {
