@@ -31,6 +31,7 @@ services:
       - path: ../env/dashboard.env.local
         required: false
     ports:
+      # Development-only tailnet override for app HTTP ports. Data stores stay loopback-bound.
       - "${TAILSCALE_BIND_IP:-127.0.0.1}:3000:3000"
     volumes:
       - ../..:/workspace
@@ -173,7 +174,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "${TAILSCALE_BIND_IP:-127.0.0.1}:5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -185,7 +186,7 @@ services:
   redis:
     image: redis:7
     ports:
-      - "${TAILSCALE_BIND_IP:-127.0.0.1}:6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -199,8 +200,8 @@ services:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: miniopassword
     ports:
-      - "${TAILSCALE_BIND_IP:-127.0.0.1}:9000:9000"
-      - "${TAILSCALE_BIND_IP:-127.0.0.1}:9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
 

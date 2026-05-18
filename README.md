@@ -455,7 +455,23 @@ infra/compose/tailscale-serve.cyberheld-ai-team.sh
 
 Use this helper for the current node-level Serve setup. The newer
 `tailscale serve set-config` file flow is for Tailscale Services and is not the
-active deployment model for this host.
+active deployment model for this host. The helper runs `tailscale serve reset`,
+so only use it on a node where the Tailscale Serve config is owned by this
+Kuuna deployment.
+
+For the browser-side tRPC client and subscriptions to use this `/trpc` route,
+set the dashboard build-time public API origin to the Tailscale HTTPS origin
+before rebuilding the image:
+
+```bash
+export NEXT_PUBLIC_API_BASE_URL=https://cyberheld-ai-team.snapper-ide.ts.net
+docker compose -f infra/compose/docker-compose.prod.yml up --build -d dashboard
+```
+
+`NEXT_PUBLIC_API_BASE_URL` is passed as a dashboard Docker build arg by Compose,
+so it must come from the Compose environment or `.env` used for the build.
+`infra/env/dashboard.env.local` is still useful for runtime dashboard env, but
+does not by itself set the build arg.
 
 Expected status:
 
@@ -490,8 +506,9 @@ just prod-migrate
 
 Before exposing the prod stack beyond localhost, create `infra/env/*.env.local`
 files with real credentials and tokens, set build-time public values such as
-`NEXT_PUBLIC_API_BASE_URL` for the deployment host, and put a TLS reverse proxy
-in front of the services.
+`NEXT_PUBLIC_API_BASE_URL` for the deployment host, and use either the Tailscale
+Serve route above for tailnet-only access or a TLS reverse proxy for intentional
+public access.
 
 ## TypeScript Monorepo Commands
 
