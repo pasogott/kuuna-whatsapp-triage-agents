@@ -24,6 +24,7 @@ export const gatewayInboundMediaSchema = z.object({
 export const gatewayInboundMessageSchema = z.object({
   text: z.string().nullable().optional(),
   reply_to_provider_message_id: z.string().nullable().optional(),
+  reply_to_provider_user_id: z.string().nullable().optional(),
   mentions: z.array(z.string()).default([]),
   media: z.array(gatewayInboundMediaSchema).default([]),
 });

@@ -104,6 +104,89 @@ test("contract: gateway inbound triggers when WhatsApp mentions bound bot identi
   ]);
 });
 
+test("contract: gateway inbound triggers when replying to bound bot identity", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  const caller = await harness.caller();
+  t.after(async () => {
+    await harness.close();
+  });
+
+  const payload = inboundPayload("msg-bot-reply");
+  await seedActiveBinding(harness, payload.provider_group_id);
+  await seedBotMember(harness, payload.provider_group_id);
+  payload.message.text = "can you check this?";
+  payload.message.reply_to_provider_message_id = "bot-msg-1";
+  payload.message.reply_to_provider_user_id = "2768027737581120@lid";
+
+  const response = await caller.gateway.inbound.ingest(payload);
+
+  assert.equal(response.accepted, true);
+  assert.equal(response.execution_enqueued, true);
+  assert.deepEqual(harness.runtimeChatTasks.map((task) => parseRuntimeChatTask(task).name), [
+    "passive_message_analysis",
+    "inbound_execution",
+  ]);
+});
+
+test("contract: gateway inbound ignores replies to non-bot messages", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  const caller = await harness.caller();
+  t.after(async () => {
+    await harness.close();
+  });
+
+  const payload = inboundPayload("msg-human-reply");
+  await seedActiveBinding(harness, payload.provider_group_id);
+  await seedBotMember(harness, payload.provider_group_id);
+  payload.message.text = "this was an ordinary threaded reply";
+  payload.message.reply_to_provider_message_id = "human-msg-1";
+  payload.message.reply_to_provider_user_id = "111111111111@lid";
+
+  const response = await caller.gateway.inbound.ingest(payload);
+
+  assert.equal(response.accepted, true);
+  assert.equal(response.execution_enqueued, false);
+  assert.deepEqual(harness.runtimeChatTasks.map((task) => parseRuntimeChatTask(task).name), [
+    "passive_message_analysis",
+  ]);
+});
+
+test("contract: gateway inbound triggers when reply matches prior bot outbound id", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  const caller = await harness.caller();
+  t.after(async () => {
+    await harness.close();
+  });
+
+  const payload = inboundPayload("msg-bot-outbound-id-reply");
+  await seedActiveBinding(harness, payload.provider_group_id);
+  payload.message.text = "following up here";
+  payload.message.reply_to_provider_message_id = "bot-provider-msg-1";
+
+  await harness.db.insert(outboundIntents).values({
+    outboundIntentId: randomUUID(),
+    providerGroupId: payload.provider_group_id,
+    status: "sent",
+    attemptCount: 1,
+    payload: {
+      text: "previous bot answer",
+      _dispatch: {
+        last_status: "sent",
+        provider_message_id: "bot-provider-msg-1",
+      },
+    },
+  });
+
+  const response = await caller.gateway.inbound.ingest(payload);
+
+  assert.equal(response.accepted, true);
+  assert.equal(response.execution_enqueued, true);
+  assert.deepEqual(harness.runtimeChatTasks.map((task) => parseRuntimeChatTask(task).name), [
+    "passive_message_analysis",
+    "inbound_execution",
+  ]);
+});
+
 test("contract: gateway inbound dedupes duplicate created event", { skip: skipReason }, async (t) => {
   const harness = await createContractHarness();
   const caller = await harness.caller();
@@ -310,4 +393,18 @@ async function seedActiveBinding(
     .returning();
   assert.ok(version);
   await harness.db.insert(groupBindings).values({ providerGroupId, templateVersionId: version.id, status: "active" });
+}
+
+async function seedBotMember(
+  harness: Awaited<ReturnType<typeof createContractHarness>>,
+  providerGroupId: string,
+): Promise<void> {
+  await harness.db.insert(groupMembers).values({
+    providerGroupId,
+    providerUserId: "2768027737581120@lid",
+    role: "bot",
+    displayName: "Kuuna Bot",
+    derivedPhone: "436765308907",
+    gatewayMetadata: { phone_number_jid: "436765308907@s.whatsapp.net" },
+  });
 }
