@@ -151,6 +151,28 @@ test("contract: gateway inbound ignores replies to non-bot messages", { skip: sk
   ]);
 });
 
+test("contract: gateway inbound ignores replies without bot participant or outbound match", { skip: skipReason }, async (t) => {
+  const harness = await createContractHarness();
+  const caller = await harness.caller();
+  t.after(async () => {
+    await harness.close();
+  });
+
+  const payload = inboundPayload("msg-unknown-reply");
+  await seedActiveBinding(harness, payload.provider_group_id);
+  await seedBotMember(harness, payload.provider_group_id);
+  payload.message.text = "replying in the thread";
+  payload.message.reply_to_provider_message_id = "unknown-human-msg-1";
+
+  const response = await caller.gateway.inbound.ingest(payload);
+
+  assert.equal(response.accepted, true);
+  assert.equal(response.execution_enqueued, false);
+  assert.deepEqual(harness.runtimeChatTasks.map((task) => parseRuntimeChatTask(task).name), [
+    "passive_message_analysis",
+  ]);
+});
+
 test("contract: gateway inbound triggers when reply matches prior bot outbound id", { skip: skipReason }, async (t) => {
   const harness = await createContractHarness();
   const caller = await harness.caller();

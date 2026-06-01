@@ -95,6 +95,21 @@ test("reply to non-agent message does not trigger", () => {
   assert.equal(decision.triggerType, null);
 });
 
+test("reply with unknown quoted message id does not trigger", () => {
+  const decision = evaluateTrigger(
+    {
+      message: {
+        text: "plain",
+        reply_to_provider_message_id: "human-msg-1",
+        mentions: [],
+      },
+    },
+    { agentMentionIds: ["2768027737581120@lid"] },
+  );
+  assert.equal(decision.shouldExecute, false);
+  assert.equal(decision.triggerType, null);
+});
+
 test("command-looking prefixes do not trigger by themselves", () => {
   const decision = evaluateTrigger({
     message: {
