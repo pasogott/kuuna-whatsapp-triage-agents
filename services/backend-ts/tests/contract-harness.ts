@@ -456,6 +456,13 @@ async function createContractTables(sql: Sql): Promise<void> {
       updated_at timestamptz not null default now()
     );
 
+    create index ix_outbound_intents_group_dispatch_provider_message
+      on outbound_intents (
+        provider_group_id,
+        ((payload->'_dispatch'->>'provider_message_id'))
+      )
+      where (payload->'_dispatch'->>'provider_message_id') is not null;
+
     create table todos (
       id uuid primary key default gen_random_uuid(),
       provider_group_id text not null,

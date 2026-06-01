@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
   type GatewayInboundAck,
@@ -80,8 +80,14 @@ export async function ingestGatewayInbound(
   runtimeChatQueue?: RuntimeChatTaskQueueClient,
 ): Promise<GatewayInboundAck> {
   const occurredAt = new Date(event.occurred_at);
+  const agentMentionIds = await loadGroupBotMentionIds(database, event.provider_group_id);
   const triggerDecision = evaluateTrigger(event, {
-    agentMentionIds: await loadGroupBotMentionIds(database, event.provider_group_id),
+    agentMentionIds,
+    replyToAgent: await isReplyToKnownBotOutbound(
+      database,
+      event.provider_group_id,
+      event.message.reply_to_provider_message_id,
+    ),
   });
 
   const result = await database.transaction(async (tx) => {
@@ -337,11 +343,38 @@ async function loadGroupBotMentionIds(database: Database, providerGroupId: strin
       providerUserId: groupMembers.providerUserId,
       derivedPhone: groupMembers.derivedPhone,
       phoneOverride: groupMembers.phoneOverride,
+      gatewayMetadata: groupMembers.gatewayMetadata,
     })
     .from(groupMembers)
     .where(and(eq(groupMembers.providerGroupId, providerGroupId), eq(groupMembers.role, "bot")));
 
-  return rows.flatMap((row) => [row.providerUserId, row.derivedPhone, row.phoneOverride].filter(isPresentString));
+  return rows.flatMap((row) =>
+    [
+      row.providerUserId,
+      row.derivedPhone,
+      row.phoneOverride,
+      stringField(objectRecord(row.gatewayMetadata), "phone_number_jid"),
+    ].filter(isPresentString),
+  );
+}
+
+async function isReplyToKnownBotOutbound(
+  database: Database,
+  providerGroupId: string,
+  replyToProviderMessageId: string | null | undefined,
+): Promise<boolean> {
+  if (!replyToProviderMessageId) return false;
+  const [row] = await database
+    .select({ id: outboundIntents.id })
+    .from(outboundIntents)
+    .where(
+      and(
+        eq(outboundIntents.providerGroupId, providerGroupId),
+        sql`${outboundIntents.payload}->'_dispatch'->>'provider_message_id' = ${replyToProviderMessageId}`,
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
 }
 
 function isPresentString(value: string | null): value is string {

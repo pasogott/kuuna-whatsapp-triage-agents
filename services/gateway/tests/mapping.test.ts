@@ -23,6 +23,7 @@ test("maps text message with raw payload, reply, and mentions", () => {
         text: "hello",
         contextInfo: {
           stanzaId: "msg-0",
+          participant: "4912@s.whatsapp.net",
           mentionedJid: ["4911@s.whatsapp.net"],
         },
       },
@@ -36,6 +37,7 @@ test("maps text message with raw payload, reply, and mentions", () => {
   assert.equal(mapped.event_type, "message_created");
   assert.equal(mapped.message.text, "hello");
   assert.equal(mapped.message.reply_to_provider_message_id, "msg-0");
+  assert.equal(mapped.message.reply_to_provider_user_id, "4912@s.whatsapp.net");
   assert.deepEqual(mapped.message.mentions, ["4911@s.whatsapp.net"]);
   assert.equal((mapped.raw_event?.key as Record<string, unknown>).id, "msg-1");
 });

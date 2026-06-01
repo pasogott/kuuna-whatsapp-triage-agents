@@ -48,18 +48,69 @@ test("configured agent identity mention triggers by WhatsApp phone jid", () => {
 });
 
 test("reply trigger is detected", () => {
-  const decision = evaluateTrigger({
-    message: {
-      text: "plain",
-      reply_to_provider_message_id: "msg-1",
-      mentions: [],
+  const decision = evaluateTrigger(
+    {
+      message: {
+        text: "plain",
+        reply_to_provider_message_id: "msg-1",
+        reply_to_provider_user_id: "2768027737581120@lid",
+        mentions: [],
+      },
     },
-  });
+    { agentMentionIds: ["2768027737581120@lid"] },
+  );
+  assert.equal(decision.shouldExecute, true);
+  assert.equal(decision.triggerType, "reply");
+  assert.equal(decision.reason, "reply_to_agent_message_present");
+});
+
+test("reply trigger falls back to known bot outbound message id", () => {
+  const decision = evaluateTrigger(
+    {
+      message: {
+        text: "plain",
+        reply_to_provider_message_id: "msg-1",
+        mentions: [],
+      },
+    },
+    { replyToAgent: true },
+  );
   assert.equal(decision.shouldExecute, true);
   assert.equal(decision.triggerType, "reply");
 });
 
-test("prefix trigger handles leading whitespace", () => {
+test("reply to non-agent message does not trigger", () => {
+  const decision = evaluateTrigger(
+    {
+      message: {
+        text: "plain",
+        reply_to_provider_message_id: "msg-1",
+        reply_to_provider_user_id: "111111111111@lid",
+        mentions: [],
+      },
+    },
+    { agentMentionIds: ["2768027737581120@lid"] },
+  );
+  assert.equal(decision.shouldExecute, false);
+  assert.equal(decision.triggerType, null);
+});
+
+test("reply with unknown quoted message id does not trigger", () => {
+  const decision = evaluateTrigger(
+    {
+      message: {
+        text: "plain",
+        reply_to_provider_message_id: "human-msg-1",
+        mentions: [],
+      },
+    },
+    { agentMentionIds: ["2768027737581120@lid"] },
+  );
+  assert.equal(decision.shouldExecute, false);
+  assert.equal(decision.triggerType, null);
+});
+
+test("command-looking prefixes do not trigger by themselves", () => {
   const decision = evaluateTrigger({
     message: {
       text: "  /kuuna help",
@@ -67,8 +118,8 @@ test("prefix trigger handles leading whitespace", () => {
       mentions: [],
     },
   });
-  assert.equal(decision.shouldExecute, true);
-  assert.equal(decision.triggerType, "prefix");
+  assert.equal(decision.shouldExecute, false);
+  assert.equal(decision.triggerType, null);
 });
 
 test("plain messages do not trigger", () => {

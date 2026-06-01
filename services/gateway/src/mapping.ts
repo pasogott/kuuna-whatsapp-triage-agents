@@ -21,6 +21,7 @@ export function mapBaileysMessage(message: AnyRecord): GatewayInboundEvent {
   const eventType = classifyEventType(content);
   const contentMessage = resolveMessageContent(content);
   const replyToProviderMessageId = extractReplyToProviderMessageId(contentMessage);
+  const replyToProviderUserId = extractReplyToProviderUserId(contentMessage);
   const deletedTargetId = eventType === "message_deleted" ? extractDeletedTargetMessageId(content) : null;
   const finalProviderMessageId = deletedTargetId || providerMessageId;
 
@@ -35,6 +36,7 @@ export function mapBaileysMessage(message: AnyRecord): GatewayInboundEvent {
     message: {
       text: extractText(contentMessage),
       reply_to_provider_message_id: replyToProviderMessageId,
+      reply_to_provider_user_id: replyToProviderUserId,
       mentions: extractMentions(contentMessage),
       media: extractMedia(contentMessage, finalProviderMessageId),
     },
@@ -152,6 +154,11 @@ function extractText(messageObj: AnyRecord): string | null {
 function extractReplyToProviderMessageId(messageObj: AnyRecord): string | null {
   const context = extractContextInfo(messageObj);
   return stringValue(fieldValue(context, ["stanzaId", "stanzaID", "StanzaID", "StanzaId"])) || null;
+}
+
+function extractReplyToProviderUserId(messageObj: AnyRecord): string | null {
+  const context = extractContextInfo(messageObj);
+  return stringValue(fieldValue(context, ["participant", "Participant", "participantPn", "participantPN"])) || null;
 }
 
 function extractMentions(messageObj: AnyRecord): string[] {

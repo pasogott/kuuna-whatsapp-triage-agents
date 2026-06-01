@@ -1,38 +1,35 @@
-const triggerPrefixes = ["kuuna:", "/kuuna", "!kuuna"] as const;
 const defaultAliases = ["agent", "kuuna"] as const;
 
 export type TriggerDecision = {
   shouldExecute: boolean;
   reason: string;
-  triggerType: "mention" | "reply" | "prefix" | null;
+  triggerType: "mention" | "reply" | null;
 };
 
 export type TriggerEvent = {
   message: {
     text?: string | null;
     reply_to_provider_message_id?: string | null;
+    reply_to_provider_user_id?: string | null;
     mentions: string[];
   };
 };
 
 export type TriggerOptions = {
   agentMentionIds?: string[];
+  replyToAgent?: boolean;
 };
 
 export function evaluateTrigger(event: TriggerEvent, options: TriggerOptions = {}): TriggerDecision {
   if (hasAgentMention(event, options)) {
     return { shouldExecute: true, reason: "agent_mention_present", triggerType: "mention" };
   }
-  if (event.message.reply_to_provider_message_id) {
+  if (hasAgentReply(event, options)) {
     return {
       shouldExecute: true,
-      reason: "reply_to_provider_message_id_present",
+      reason: "reply_to_agent_message_present",
       triggerType: "reply",
     };
-  }
-  const text = (event.message.text ?? "").trimStart();
-  if (triggerPrefixes.some((prefix) => text.startsWith(prefix))) {
-    return { shouldExecute: true, reason: "prefix_match", triggerType: "prefix" };
   }
   return { shouldExecute: false, reason: "no_trigger_match", triggerType: null };
 }
@@ -75,6 +72,22 @@ function hasAgentMention(event: TriggerEvent, options: TriggerOptions): boolean 
     }
   }
   return false;
+}
+
+function hasAgentReply(event: TriggerEvent, options: TriggerOptions): boolean {
+  if (!event.message.reply_to_provider_message_id) return false;
+  if (options.replyToAgent) return true;
+
+  const replyToProviderUserId = event.message.reply_to_provider_user_id;
+  if (!replyToProviderUserId) return false;
+
+  const configuredIds = identityCandidates([
+    ...configuredCsvValues("AGENT_MENTION_IDS"),
+    ...(options.agentMentionIds ?? []),
+  ]);
+  if (configuredIds.size === 0) return false;
+
+  return Array.from(identityCandidates([replyToProviderUserId])).some((candidate) => configuredIds.has(candidate));
 }
 
 function identityCandidates(values: Iterable<string>): Set<string> {
