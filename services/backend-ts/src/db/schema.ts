@@ -439,16 +439,24 @@ export const embeddings = pgTable("embeddings", {
   updatedAt,
 });
 
-export const outboundIntents = pgTable("outbound_intents", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  outboundIntentId: uuid("outbound_intent_id").notNull(),
-  providerGroupId: text("provider_group_id").notNull(),
-  status: outboundStatus("status").default("pending").notNull(),
-  attemptCount: integer("attempt_count").default(0).notNull(),
-  payload: jsonb("payload").default({}).notNull(),
-  createdAt,
-  updatedAt,
-});
+export const outboundIntents = pgTable(
+  "outbound_intents",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    outboundIntentId: uuid("outbound_intent_id").notNull(),
+    providerGroupId: text("provider_group_id").notNull(),
+    status: outboundStatus("status").default("pending").notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    payload: jsonb("payload").default({}).notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => ({
+    groupDispatchProviderMessageIdx: index("ix_outbound_intents_group_dispatch_provider_message")
+      .on(table.providerGroupId, sql`${table.payload}->'_dispatch'->>'provider_message_id'`)
+      .where(sql`${table.payload}->'_dispatch'->>'provider_message_id' is not null`),
+  }),
+);
 
 export const auditEvents = pgTable("audit_events", {
   id: uuid("id").defaultRandom().primaryKey(),
