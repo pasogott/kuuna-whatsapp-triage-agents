@@ -95,7 +95,7 @@ test("reply to non-agent message does not trigger", () => {
   assert.equal(decision.triggerType, null);
 });
 
-test("prefix trigger handles leading whitespace", () => {
+test("command-looking prefixes do not trigger by themselves", () => {
   const decision = evaluateTrigger({
     message: {
       text: "  /kuuna help",
@@ -103,8 +103,8 @@ test("prefix trigger handles leading whitespace", () => {
       mentions: [],
     },
   });
-  assert.equal(decision.shouldExecute, true);
-  assert.equal(decision.triggerType, "prefix");
+  assert.equal(decision.shouldExecute, false);
+  assert.equal(decision.triggerType, null);
 });
 
 test("plain messages do not trigger", () => {

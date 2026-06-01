@@ -1,10 +1,9 @@
-const triggerPrefixes = ["kuuna:", "/kuuna", "!kuuna"] as const;
 const defaultAliases = ["agent", "kuuna"] as const;
 
 export type TriggerDecision = {
   shouldExecute: boolean;
   reason: string;
-  triggerType: "mention" | "reply" | "prefix" | null;
+  triggerType: "mention" | "reply" | null;
 };
 
 export type TriggerEvent = {
@@ -31,10 +30,6 @@ export function evaluateTrigger(event: TriggerEvent, options: TriggerOptions = {
       reason: "reply_to_agent_message_present",
       triggerType: "reply",
     };
-  }
-  const text = (event.message.text ?? "").trimStart();
-  if (triggerPrefixes.some((prefix) => text.startsWith(prefix))) {
-    return { shouldExecute: true, reason: "prefix_match", triggerType: "prefix" };
   }
   return { shouldExecute: false, reason: "no_trigger_match", triggerType: null };
 }
